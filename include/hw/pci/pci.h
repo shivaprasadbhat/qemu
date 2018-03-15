@@ -21,7 +21,7 @@ extern bool pci_available;
 #define PCI_BUILD_BDF(bus, devfn)     ((bus << 8) | (devfn))
 #define PCI_BUS_MAX             256
 #define PCI_DEVFN_MAX           256
-#define PCI_SLOT_MAX            32
+#define PCI_SLOT_MAX            3
 #define PCI_FUNC_MAX            8
 
 /* Class, Vendor and Device IDs from Linux's pci_ids.h */

@@ -937,11 +937,11 @@ static void populate_resource_props(PCIDevice *d, ResourceProps *rp)
         reg->size_lo = cpu_to_be32(d->io_regions[i].size);
 
         if (d->io_regions[i].addr == PCI_BAR_UNMAPPED) {
-            continue;
+          //continue;
         }
 
         assigned = &rp->assigned[assigned_idx++];
-        assigned->phys_hi = cpu_to_be32(reg->phys_hi | b_n(1));
+        assigned->phys_hi = reg->phys_hi | cpu_to_be32(b_n(1));
         assigned->phys_mid = cpu_to_be32(d->io_regions[i].addr >> 32);
         assigned->phys_lo = cpu_to_be32(d->io_regions[i].addr);
         assigned->size_hi = reg->size_hi;

@@ -1024,6 +1024,7 @@ static void spapr_dt_chosen(sPAPRMachineState *spapr, void *fdt)
         uint64_t kprop[2] = { cpu_to_be64(KERNEL_LOAD_ADDR),
                               cpu_to_be64(spapr->kernel_size) };
 
+        _FDT(fdt_setprop_cell(fdt, chosen, "linux,pci-probe-only", 0));
         _FDT(fdt_setprop(fdt, chosen, "qemu,boot-kernel",
                          &kprop, sizeof(kprop)));
         if (spapr->kernel_le) {
@@ -1471,6 +1472,7 @@ static int spapr_reset_drcs(Object *child, void *opaque)
 static void spapr_machine_reset(void)
 {
     MachineState *machine = MACHINE(qdev_get_machine());
+    const char *kernel_filename = machine->kernel_filename;
     sPAPRMachineState *spapr = SPAPR_MACHINE(machine);
     PowerPCCPU *first_ppc_cpu;
     uint32_t rtas_limit;
@@ -1548,13 +1550,17 @@ static void spapr_machine_reset(void)
     first_ppc_cpu->env.gpr[3] = fdt_addr;
     first_ppc_cpu->env.gpr[5] = 0;
     first_cpu->halted = 0;
-    first_ppc_cpu->env.nip = SPAPR_ENTRY_POINT;
+    if(kernel_filename)
+        first_ppc_cpu->env.nip = KERNEL_LOAD_ADDR;
+    else
+        first_ppc_cpu->env.nip = SPAPR_ENTRY_POINT;
 
     spapr->cas_reboot = false;
 }
 
 static void spapr_create_nvram(sPAPRMachineState *spapr)
 {
+#if 0
     DeviceState *dev = qdev_create(&spapr->vio_bus->bus, "spapr-nvram");
     DriveInfo *dinfo = drive_get(IF_PFLASH, 0, 0);
 
@@ -1566,6 +1572,7 @@ static void spapr_create_nvram(sPAPRMachineState *spapr)
     qdev_init_nofail(dev);
 
     spapr->nvram = (struct sPAPRNVRAM *)dev;
+#endif
 }
 
 static void spapr_rtc_create(sPAPRMachineState *spapr)
@@ -2643,13 +2650,6 @@ static void spapr_machine_init(MachineState *machine)
         }
     }
 
-    if (spapr->rma_size < (MIN_RMA_SLOF << 20)) {
-        error_report(
-            "pSeries SLOF firmware requires >= %ldM guest RMA (Real Mode Area memory)",
-            MIN_RMA_SLOF);
-        exit(1);
-    }
-
     if (kernel_filename) {
         uint64_t lowaddr = 0;
 
@@ -2686,23 +2686,29 @@ static void spapr_machine_init(MachineState *machine)
                 exit(1);
             }
         }
-    }
+    } else {
+        if (spapr->rma_size < (MIN_RMA_SLOF << 20)) {
+            error_report(
+                "pSeries SLOF firmware requires >= %ldM guest RMA (Real Mode Area memory)",
+                MIN_RMA_SLOF);
+            exit(1);
+        }
 
-    if (bios_name == NULL) {
-        bios_name = FW_FILE_NAME;
+        if (bios_name == NULL) {
+            bios_name = FW_FILE_NAME;
+        }
+        filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+        if (!filename) {
+            error_report("Could not find LPAR firmware '%s'", bios_name);
+            exit(1);
+        }
+        fw_size = load_image_targphys(filename, 0, FW_MAX_SIZE);
+        if (fw_size <= 0) {
+            error_report("Could not load LPAR firmware '%s'", filename);
+            exit(1);
+        }
+        g_free(filename);
     }
-    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
-    if (!filename) {
-        error_report("Could not find LPAR firmware '%s'", bios_name);
-        exit(1);
-    }
-    fw_size = load_image_targphys(filename, 0, FW_MAX_SIZE);
-    if (fw_size <= 0) {
-        error_report("Could not load LPAR firmware '%s'", filename);
-        exit(1);
-    }
-    g_free(filename);
-
     /* FIXME: Should register things through the MachineState's qdev
      * interface, this is a legacy from the sPAPREnvironment structure
      * which predated MachineState but had a similar function */
