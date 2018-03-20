@@ -1472,8 +1472,8 @@ static int spapr_reset_drcs(Object *child, void *opaque)
 static void spapr_machine_reset(void)
 {
     MachineState *machine = MACHINE(qdev_get_machine());
-    const char *kernel_filename = machine->kernel_filename;
     sPAPRMachineState *spapr = SPAPR_MACHINE(machine);
+    sPAPRMachineClass *smc = SPAPR_MACHINE_GET_CLASS(spapr);
     PowerPCCPU *first_ppc_cpu;
     uint32_t rtas_limit;
     hwaddr rtas_addr, fdt_addr;
@@ -1550,17 +1550,16 @@ static void spapr_machine_reset(void)
     first_ppc_cpu->env.gpr[3] = fdt_addr;
     first_ppc_cpu->env.gpr[5] = 0;
     first_cpu->halted = 0;
-    if(kernel_filename)
+    if(smc->lite)
         first_ppc_cpu->env.nip = KERNEL_LOAD_ADDR;
     else
         first_ppc_cpu->env.nip = SPAPR_ENTRY_POINT;
-
+    printf("Starting first cpu now\n");
     spapr->cas_reboot = false;
 }
 
 static void spapr_create_nvram(sPAPRMachineState *spapr)
 {
-#if 0
     DeviceState *dev = qdev_create(&spapr->vio_bus->bus, "spapr-nvram");
     DriveInfo *dinfo = drive_get(IF_PFLASH, 0, 0);
 
@@ -1572,7 +1571,6 @@ static void spapr_create_nvram(sPAPRMachineState *spapr)
     qdev_init_nofail(dev);
 
     spapr->nvram = (struct sPAPRNVRAM *)dev;
-#endif
 }
 
 static void spapr_rtc_create(sPAPRMachineState *spapr)
@@ -2593,18 +2591,17 @@ static void spapr_machine_init(MachineState *machine)
     /* Set up the RTC RTAS interfaces */
     spapr_rtc_create(spapr);
 
-    /* Set up VIO bus */
-    spapr->vio_bus = spapr_vio_bus_init();
-
-    for (i = 0; i < MAX_SERIAL_PORTS; i++) {
-        if (serial_hds[i]) {
-            spapr_vty_create(spapr->vio_bus, serial_hds[i]);
+    if (smc->lite) {
+        /* Set up VIO bus */
+        spapr->vio_bus = spapr_vio_bus_init();
+        for (i = 0; i < MAX_SERIAL_PORTS; i++) {
+            if (serial_hds[i]) {
+                spapr_vty_create(spapr->vio_bus, serial_hds[i]);
+            }
         }
+        /* We always have at least the nvram device on VIO */
+        spapr_create_nvram(spapr);
     }
-
-    /* We always have at least the nvram device on VIO */
-    spapr_create_nvram(spapr);
-
     /* Set up PCI */
     spapr_pci_rtas_init();
 
@@ -2625,31 +2622,32 @@ static void spapr_machine_init(MachineState *machine)
         }
     }
 
-    for (i = 0; i <= drive_get_max_bus(IF_SCSI); i++) {
-        spapr_vscsi_create(spapr->vio_bus);
-    }
-
-    /* Graphics */
-    if (spapr_vga_init(phb->bus, &error_fatal)) {
-        spapr->has_graphics = true;
-        machine->usb |= defaults_enabled() && !machine->usb_disabled;
-    }
-
-    if (machine->usb) {
-        if (smc->use_ohci_by_default) {
-            pci_create_simple(phb->bus, -1, "pci-ohci");
-        } else {
-            pci_create_simple(phb->bus, -1, "nec-usb-xhci");
+    if (smc->lite) {
+        for (i = 0; i <= drive_get_max_bus(IF_SCSI); i++) {
+            spapr_vscsi_create(spapr->vio_bus);
         }
 
-        if (spapr->has_graphics) {
-            USBBus *usb_bus = usb_bus_find(-1);
+        /* Graphics */
+        if (spapr_vga_init(phb->bus, &error_fatal)) {
+          spapr->has_graphics = true;
+          machine->usb |= defaults_enabled() && !machine->usb_disabled;
+        }
 
-            usb_create_simple(usb_bus, "usb-kbd");
-            usb_create_simple(usb_bus, "usb-mouse");
+        if (machine->usb) {
+            if (smc->use_ohci_by_default) {
+                pci_create_simple(phb->bus, -1, "pci-ohci");
+            } else {
+                pci_create_simple(phb->bus, -1, "nec-usb-xhci");
+            }
+
+            if (spapr->has_graphics) {
+                USBBus *usb_bus = usb_bus_find(-1);
+
+                usb_create_simple(usb_bus, "usb-kbd");
+                usb_create_simple(usb_bus, "usb-mouse");
+            }
         }
     }
-
     if (kernel_filename) {
         uint64_t lowaddr = 0;
 
@@ -3885,7 +3883,7 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
     InterruptStatsProviderClass *ispc = INTERRUPT_STATS_PROVIDER_CLASS(oc);
 
     mc->desc = "pSeries Logical Partition (PAPR compliant)";
-
+    printf("%s: enter\n", __func__);
     /*
      * We set up the default / latest behaviour here.  The class_init
      * functions for the specific versioned machine types can override
@@ -4003,6 +4001,23 @@ static void spapr_machine_2_12_class_options(MachineClass *mc)
 }
 
 DEFINE_SPAPR_MACHINE(2_12, "2.12", true);
+
+/*
+ * pseries-2.12
+ */
+static void spapr_machine_lite_instance_options(MachineState *machine)
+{
+}
+
+static void spapr_machine_lite_class_options(MachineClass *mc)
+{
+    /* Defaults for the latest behaviour inherited from the base class */
+    sPAPRMachineClass *smc = SPAPR_MACHINE_CLASS(mc);
+    printf("%s: enter\n", __func__);
+    smc->lite = true;
+}
+
+DEFINE_SPAPR_MACHINE(lite, "lite", true);
 
 static void spapr_machine_2_12_sxxm_instance_options(MachineState *machine)
 {
@@ -4357,3 +4372,4 @@ static void spapr_machine_register_types(void)
 }
 
 type_init(spapr_machine_register_types)
+
