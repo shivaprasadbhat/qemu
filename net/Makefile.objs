@@ -10,10 +10,7 @@ common-obj-$(CONFIG_NETMAP) += netmap.o
 common-obj-y += filter.o
 common-obj-y += filter-buffer.o
 common-obj-y += filter-mirror.o
-common-obj-y += colo-compare.o
-common-obj-y += colo.o
-common-obj-y += filter-rewriter.o
-common-obj-y += filter-replay.o
+common-obj-$(CONFIG_COLO) += colo-compare.o colo.o filter-rewriter.o filter-replay.o
 
 tap-obj-$(CONFIG_LINUX) = tap-linux.o
 tap-obj-$(CONFIG_BSD) = tap-bsd.o
