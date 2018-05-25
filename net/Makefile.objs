@@ -1,6 +1,6 @@
 common-obj-y = net.o queue.o checksum.o util.o hub.o
-common-obj-y += socket.o
-common-obj-y += dump.o
+common-obj-$(CONFIG_NET_SOCKET) += socket.o
+common-obj-$(CONFIG_NET_DUMP) += dump.o
 common-obj-y += eth.o
 common-obj-$(CONFIG_L2TPV3) += l2tpv3.o
 common-obj-$(CONFIG_POSIX) += vhost-user.o
@@ -8,8 +8,8 @@ common-obj-$(CONFIG_SLIRP) += slirp.o
 common-obj-$(CONFIG_VDE) += vde.o
 common-obj-$(CONFIG_NETMAP) += netmap.o
 common-obj-y += filter.o
-common-obj-y += filter-buffer.o
-common-obj-y += filter-mirror.o
+common-obj-$(CONFIG_NET_FILTER_BUFFER) += filter-buffer.o
+common-obj-$(CONFIG_NET_FILTER_MIRROR) += filter-mirror.o
 common-obj-$(CONFIG_COLO) += colo-compare.o colo.o filter-rewriter.o filter-replay.o
 
 tap-obj-$(CONFIG_LINUX) = tap-linux.o

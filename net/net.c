@@ -939,7 +939,9 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
         [NET_CLIENT_DRIVER_USER]      = net_init_slirp,
 #endif
         [NET_CLIENT_DRIVER_TAP]       = net_init_tap,
+#ifdef CONFIG_NET_SOCKET
         [NET_CLIENT_DRIVER_SOCKET]    = net_init_socket,
+#endif
 #ifdef CONFIG_VDE
         [NET_CLIENT_DRIVER_VDE]       = net_init_vde,
 #endif
