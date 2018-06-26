@@ -256,8 +256,10 @@ static void pc_q35_init(MachineState *machine)
     }
 
     if (machine_usb(machine)) {
+#if defined(CONFIG_EHCI)
         /* Should we create 6 UHCI according to ich9 spec? */
         ehci_create_ich9_with_companions(host_bus, 0x1d);
+#endif
     }
 
     if (pcms->smbus) {

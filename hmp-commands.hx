@@ -856,6 +856,8 @@ Inject an NMI on the default CPU (x86/s390) or all CPUs (ppc64).
 
 ETEXI
 
+#ifdef CONFIG_CHAR_RINGBUF
+
     {
         .name       = "ringbuf_write",
         .args_type  = "device:s,data:s",
@@ -894,6 +896,7 @@ NUL characters, after the ring buffer lost data, and when reading
 stops because the size limit is reached.
 
 ETEXI
+#endif
 
     {
         .name       = "migrate",

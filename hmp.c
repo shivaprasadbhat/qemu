@@ -1090,6 +1090,7 @@ void hmp_pmemsave(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, &err);
 }
 
+#ifdef CONFIG_CHAR_RINGBUF
 void hmp_ringbuf_write(Monitor *mon, const QDict *qdict)
 {
     const char *chardev = qdict_get_str(qdict, "device");
@@ -1130,6 +1131,7 @@ void hmp_ringbuf_read(Monitor *mon, const QDict *qdict)
     monitor_printf(mon, "\n");
     g_free(data);
 }
+#endif
 
 void hmp_cont(Monitor *mon, const QDict *qdict)
 {
