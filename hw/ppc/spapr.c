@@ -79,6 +79,9 @@
 #include "hw/ppc/spapr_cpu_core.h"
 #include "hw/mem/memory-device.h"
 #include "hw/ppc/spapr_tpm_proxy.h"
+#include "hw/mem/nvdimm.h"
+#include "qemu/nvdimm-utils.h"
+#include "hw/ppc/spapr_nvdimm.h"
 
 #include "monitor/monitor.h"
 
@@ -674,6 +677,9 @@ static int spapr_populate_drmem_v2(SpaprMachineState *spapr, void *fdt,
         size = di->size;
         node = di->node;
 
+	if (info->value->type == MEMORY_DEVICE_INFO_KIND_NVDIMM)
+	    continue;
+
         /* Entry for hot-pluggable area */
         if (cur_addr < addr) {
             drc = spapr_drc_by_id(TYPE_SPAPR_DRC_LMB, cur_addr / lmb_size);
@@ -682,11 +688,13 @@ static int spapr_populate_drmem_v2(SpaprMachineState *spapr, void *fdt,
                                          cur_addr, spapr_drc_index(drc), -1, 0);
             QSIMPLEQ_INSERT_TAIL(&drconf_queue, elem, entry);
             nr_entries++;
+
         }
 
-        /* Entry for DIMM */
         drc = spapr_drc_by_id(TYPE_SPAPR_DRC_LMB, addr / lmb_size);
         g_assert(drc);
+
+        /* Entry for DIMM */
         elem = spapr_get_drconf_cell(size / lmb_size, addr,
                                      spapr_drc_index(drc), node,
                                      SPAPR_LMB_FLAGS_ASSIGNED);
@@ -1263,6 +1271,11 @@ void *spapr_build_fdt(SpaprMachineState *spapr, bool reset, size_t space)
             error_report("Couldn't set up PHB DR device tree properties");
             exit(1);
         }
+    }
+
+    /* NVDIMM devices */
+    if (mc->nvdimm_supported) {
+        spapr_dt_persistent_memory(fdt);
     }
 
     return fdt;
@@ -2582,6 +2595,7 @@ static void spapr_machine_init(MachineState *machine)
 {
     SpaprMachineState *spapr = SPAPR_MACHINE(machine);
     SpaprMachineClass *smc = SPAPR_MACHINE_GET_CLASS(machine);
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     const char *kernel_filename = machine->kernel_filename;
     const char *initrd_filename = machine->initrd_filename;
     PCIHostState *phb;
@@ -2805,6 +2819,10 @@ static void spapr_machine_init(MachineState *machine)
 
     if (smc->dr_lmb_enabled) {
         spapr_create_lmb_dr_connectors(spapr);
+    }
+
+    if (mc->nvdimm_supported) {
+        spapr_create_nvdimm_dr_connectors(spapr);
     }
 
     /* Set up RTAS event infrastructure */
@@ -3374,7 +3392,8 @@ static void spapr_memory_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     Error *local_err = NULL;
     SpaprMachineState *ms = SPAPR_MACHINE(hotplug_dev);
     PCDIMMDevice *dimm = PC_DIMM(dev);
-    uint64_t size, addr;
+    uint64_t size, addr, slot;
+    bool is_nvdimm = object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM);
 
     size = memory_device_get_region_size(MEMORY_DEVICE(dev), &error_abort);
 
@@ -3383,14 +3402,24 @@ static void spapr_memory_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
         goto out;
     }
 
-    addr = object_property_get_uint(OBJECT(dimm),
-                                    PC_DIMM_ADDR_PROP, &local_err);
-    if (local_err) {
-        goto out_unplug;
+    if (!is_nvdimm) {
+        addr = object_property_get_uint(OBJECT(dimm),
+                                        PC_DIMM_ADDR_PROP, &local_err);
+        if (local_err) {
+            goto out_unplug;
+        }
+        spapr_add_lmbs(dev, addr, size,
+                       spapr_ovec_test(ms->ov5_cas, OV5_HP_EVT),
+                       &local_err);
+    } else {
+        slot = object_property_get_uint(OBJECT(dimm),
+                                        PC_DIMM_SLOT_PROP, &local_err);
+        if (local_err) {
+            goto out_unplug;
+        }
+        spapr_add_nvdimm(dev, slot, &local_err);
     }
 
-    spapr_add_lmbs(dev, addr, size, spapr_ovec_test(ms->ov5_cas, OV5_HP_EVT),
-                   &local_err);
     if (local_err) {
         goto out_unplug;
     }
@@ -3408,6 +3437,8 @@ static void spapr_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
 {
     const SpaprMachineClass *smc = SPAPR_MACHINE_GET_CLASS(hotplug_dev);
     SpaprMachineState *spapr = SPAPR_MACHINE(hotplug_dev);
+    const MachineClass *mc = MACHINE_CLASS(smc);
+    bool is_nvdimm = object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM);
     PCDIMMDevice *dimm = PC_DIMM(dev);
     Error *local_err = NULL;
     uint64_t size;
@@ -3419,16 +3450,40 @@ static void spapr_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
         return;
     }
 
+    if (is_nvdimm && !mc->nvdimm_supported) {
+        error_setg(errp, "NVDIMM hotplug not supported for this machine");
+        return;
+    }
+
     size = memory_device_get_region_size(MEMORY_DEVICE(dimm), &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
     }
 
-    if (size % SPAPR_MEMORY_BLOCK_SIZE) {
+    if (!is_nvdimm && size % SPAPR_MEMORY_BLOCK_SIZE) {
         error_setg(errp, "Hotplugged memory size must be a multiple of "
-                      "%" PRIu64 " MB", SPAPR_MEMORY_BLOCK_SIZE / MiB);
+                   "%" PRIu64 " MB", SPAPR_MEMORY_BLOCK_SIZE / MiB);
         return;
+    } else if (is_nvdimm) {
+        char *uuidstr = NULL;
+        QemuUUID uuid;
+
+        if (size % SPAPR_MINIMUM_SCM_BLOCK_SIZE) {
+            error_setg(errp, "NVDIMM memory size excluding the label area"
+                       " must be a multiple of %" PRIu64 "MB",
+                       SPAPR_MINIMUM_SCM_BLOCK_SIZE / MiB);
+            return;
+        }
+
+        uuidstr = object_property_get_str(OBJECT(dimm), NVDIMM_UUID_PROP, NULL);
+        qemu_uuid_parse(uuidstr, &uuid);
+        g_free(uuidstr);
+
+        if (qemu_uuid_is_null(&uuid)) {
+            error_setg(errp, "NVDIMM device requires the uuid to be set");
+            return;
+        }
     }
 
     memdev = object_property_get_link(OBJECT(dimm), PC_DIMM_MEMDEV_PROP,
@@ -3567,6 +3622,12 @@ static void spapr_memory_unplug_request(HotplugHandler *hotplug_dev,
     uint64_t size, addr_start, addr;
     int i;
     SpaprDrc *drc;
+
+    if (object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM)) {
+        error_setg(&local_err,
+                   "nvdimm device hot unplug is not supported yet.");
+        goto out;
+    }
 
     size = memory_device_get_region_size(MEMORY_DEVICE(dimm), &error_abort);
     nr_lmbs = size / SPAPR_MEMORY_BLOCK_SIZE;
@@ -4362,6 +4423,7 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
     smc->update_dt_enabled = true;
     mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power9_v2.0");
     mc->has_hotpluggable_cpus = true;
+    mc->nvdimm_supported = true;
     smc->resize_hpt_default = SPAPR_RESIZE_HPT_ENABLED;
     fwc->get_dev_path = spapr_get_fw_dev_path;
     nc->nmi_monitor_handler = spapr_nmi;
@@ -4467,6 +4529,7 @@ static void spapr_machine_4_2_class_options(MachineClass *mc)
 {
     spapr_machine_5_0_class_options(mc);
     compat_props_add(mc->compat_props, hw_compat_4_2, hw_compat_4_2_len);
+    mc->nvdimm_supported = false;
 }
 
 DEFINE_SPAPR_MACHINE(4_2, "4.2", false);
