@@ -1623,6 +1623,17 @@ void memory_region_set_size(MemoryRegion *mr, uint64_t size);
 void memory_region_set_alias_offset(MemoryRegion *mr,
                                     hwaddr offset);
 
+/*
+ * memory_region_set_alias: dynamically update a memory alias
+ *
+ * Dynamically aliases region into the target region that the alias points to.
+ *
+ * @mr: the #MemoryRegion to be updated; should be not be an alias.
+ * @alias : the target memory region
+ */
+void memory_region_set_alias(MemoryRegion *mr,
+                             MemoryRegion *orig);
+
 /**
  * memory_region_present: checks if an address relative to a @container
  * translates into #MemoryRegion within @container

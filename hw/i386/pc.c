@@ -2190,7 +2190,19 @@ static void pc_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     }
 
     pc_dimm_pre_plug(PC_DIMM(dev), MACHINE(hotplug_dev),
-                     pcmc->enforce_aligned_dimm ? NULL : &legacy_align, errp);
+                     pcmc->enforce_aligned_dimm ? NULL : &legacy_align,
+                     &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return;
+    }
+
+    if (is_nvdimm) {
+        NVDIMMDevice *nvdimm = NVDIMM(dev);
+        NVDIMMClass *ddc = NVDIMM_GET_CLASS(nvdimm);
+
+        ddc->data_region_bind(nvdimm);
+    }
 }
 
 static void pc_memory_plug(HotplugHandler *hotplug_dev,

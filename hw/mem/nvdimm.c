@@ -188,10 +188,28 @@ static void nvdimm_prepare_memory_region(NVDIMMDevice *nvdimm, Error **errp)
     }
 
     nvdimm->nvdimm_mr = g_new(MemoryRegion, 1);
-    memory_region_init_alias(nvdimm->nvdimm_mr, OBJECT(dimm),
-                             "nvdimm-memory", mr, 0, pmem_size);
+    memory_region_init(nvdimm->nvdimm_mr, OBJECT(dimm),
+                       "nvdimm-memory", pmem_size);
     memory_region_set_nonvolatile(nvdimm->nvdimm_mr, true);
     nvdimm->nvdimm_mr->align = align;
+}
+
+static void nvdimm_bind_data_memory_region(NVDIMMDevice *nvdimm)
+{
+    PCDIMMDevice *dimm = PC_DIMM(nvdimm);
+    MemoryRegion *mr;
+
+    g_assert(nvdimm->nvdimm_mr);
+
+    mr = host_memory_backend_get_memory(dimm->hostmem);
+    memory_region_set_alias(nvdimm->nvdimm_mr, mr);
+}
+
+static void nvdimm_unbind_data_memory_region(NVDIMMDevice *nvdimm)
+{
+    g_assert(nvdimm->nvdimm_mr);
+
+    memory_region_set_alias(nvdimm->nvdimm_mr, NULL);
 }
 
 static MemoryRegion *nvdimm_md_get_memory_region(MemoryDeviceState *md,
@@ -275,6 +293,8 @@ static void nvdimm_class_init(ObjectClass *oc, void *data)
     mdc->get_memory_region = nvdimm_md_get_memory_region;
     dc->props = nvdimm_properties;
 
+    nvc->data_region_bind = nvdimm_bind_data_memory_region;
+    nvc->data_region_unbind = nvdimm_unbind_data_memory_region;
     nvc->read_label_data = nvdimm_read_label_data;
     nvc->write_label_data = nvdimm_write_label_data;
 }

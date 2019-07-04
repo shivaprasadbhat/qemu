@@ -1798,6 +1798,21 @@ static int spapr_reset_drcs(Object *child, void *opaque)
     return 0;
 }
 
+static int spapr_reset_nvdimms(Object *child, void *opaque)
+{
+    NVDIMMDevice *nvdimm = NULL;
+    NVDIMMClass *ddc = NULL;
+
+    nvdimm = (NVDIMMDevice *) object_dynamic_cast(child, TYPE_NVDIMM);
+
+    if (nvdimm) {
+        ddc = NVDIMM_GET_CLASS(nvdimm);
+        ddc->data_region_unbind(nvdimm);
+    }
+
+    return 0;
+}
+
 static void spapr_machine_reset(MachineState *machine)
 {
     SpaprMachineState *spapr = SPAPR_MACHINE(machine);
@@ -1873,6 +1888,11 @@ static void spapr_machine_reset(MachineState *machine)
      * situations, we reset DRCs after all devices have been reset.
      */
     object_child_foreach_recursive(object_get_root(), spapr_reset_drcs, NULL);
+
+
+    /* The nvdimms should be in unbound state during guest boot */
+    object_child_foreach_recursive(object_get_root(),
+                                   spapr_reset_nvdimms, NULL);
 
     spapr_clear_pending_events(spapr);
 

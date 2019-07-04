@@ -1950,6 +1950,8 @@ static target_ulong h_scm_bind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
     uint64_t continue_token = args[4];
     uint64_t size;
     uint64_t total_no_of_scm_blocks;
+    NVDIMMDevice *nvdimm = NULL;
+    NVDIMMClass *ddc = NULL;
 
     SpaprDrc *drc = spapr_drc_by_index(drc_index);
     hwaddr addr;
@@ -1996,13 +1998,17 @@ static target_ulong h_scm_bind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
         return H_P5;
     }
 
-    /* NB : Already bound, Return target logical address in R4 */
     addr = object_property_get_uint(OBJECT(dimm),
                                     PC_DIMM_ADDR_PROP, &local_err);
     if (local_err) {
         error_report_err(local_err);
         return H_PARAMETER;
     }
+
+    nvdimm = NVDIMM(dev);
+    ddc = NVDIMM_GET_CLASS(nvdimm);
+
+    ddc->data_region_bind(nvdimm);
 
     args[1] = addr;
     args[2] = no_of_scm_blocks_to_bind;
@@ -2025,6 +2031,8 @@ static target_ulong h_scm_unbind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
     DeviceState *dev = NULL;
     PCDIMMDevice *dimm = NULL;
     uint64_t size, addr;
+    NVDIMMDevice *nvdimm = NULL;
+    NVDIMMClass *ddc = NULL;
 
     if (drc && spapr_drc_type(drc) != SPAPR_DR_CONNECTOR_TYPE_PMEM) {
         return H_PARAMETER;
@@ -2058,7 +2066,11 @@ static target_ulong h_scm_unbind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
 
     args[1] = no_of_scm_blocks_to_unbind;
 
-    /*NB : dont do anything, let object_del take care of this for now. */
+    nvdimm = NVDIMM(dev);
+    ddc = NVDIMM_GET_CLASS(nvdimm);
+
+    ddc->data_region_unbind(nvdimm);
+
     return H_SUCCESS;
 }
 

@@ -97,6 +97,8 @@ struct NVDIMMClass {
     PCDIMMDeviceClass parent_class;
 
     /* public */
+    void (*data_region_bind)(NVDIMMDevice *nvdimm);
+    void (*data_region_unbind)(NVDIMMDevice *nvdimm);
 
     /* read @size bytes from NVDIMM label data at @offset into @buf. */
     void (*read_label_data)(NVDIMMDevice *nvdimm, void *buf,

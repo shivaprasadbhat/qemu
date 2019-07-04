@@ -2513,6 +2513,18 @@ void memory_region_set_alias_offset(MemoryRegion *mr, hwaddr offset)
     memory_region_transaction_commit();
 }
 
+void memory_region_set_alias(MemoryRegion *mr, MemoryRegion *orig)
+{
+    if (orig == mr->alias) {
+        return;
+    }
+
+    memory_region_transaction_begin();
+    mr->alias = orig;
+    memory_region_update_pending |= mr->enabled;
+    memory_region_transaction_commit();
+}
+
 uint64_t memory_region_get_alignment(const MemoryRegion *mr)
 {
     return mr->align;
