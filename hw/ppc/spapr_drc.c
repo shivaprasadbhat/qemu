@@ -717,7 +717,7 @@ static void spapr_drc_pmem_class_init(ObjectClass *k, void *data)
     drck->typeshift = SPAPR_DR_CONNECTOR_TYPE_SHIFT_PMEM;
     drck->typename = "PMEM";
     drck->drc_name_prefix = "PMEM ";
-    drck->release = NULL;
+    drck->release = spapr_nvdimm_release;
     drck->dt_populate = spapr_pmem_dt_populate;
 }
 

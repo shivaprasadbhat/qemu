@@ -833,6 +833,7 @@ void spapr_core_release(DeviceState *dev);
 int spapr_core_dt_populate(SpaprDrc *drc, SpaprMachineState *spapr,
                            void *fdt, int *fdt_start_offset, Error **errp);
 void spapr_lmb_release(DeviceState *dev);
+void spapr_nvdimm_release(DeviceState *dev);
 int spapr_lmb_dt_populate(SpaprDrc *drc, SpaprMachineState *spapr,
                           void *fdt, int *fdt_start_offset, Error **errp);
 void spapr_phb_release(DeviceState *dev);

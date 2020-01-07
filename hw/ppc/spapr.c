@@ -3646,6 +3646,19 @@ void spapr_lmb_release(DeviceState *dev)
     object_unparent(OBJECT(dev));
 }
 
+void spapr_nvdimm_release(DeviceState *dev)
+{
+    HotplugHandler *hotplug_ctrl = qdev_get_hotplug_handler(dev);
+
+    /*
+     * Now that all the LMBs have been removed by the guest, call the
+     * unplug handler chain. This can never fail.
+     */
+    hotplug_handler_unplug(hotplug_ctrl, dev, &error_abort);
+    object_unparent(OBJECT(dev));
+}
+
+
 static void spapr_memory_unplug(HotplugHandler *hotplug_dev, DeviceState *dev)
 {
     SpaprMachineState *spapr = SPAPR_MACHINE(hotplug_dev);
@@ -3653,7 +3666,9 @@ static void spapr_memory_unplug(HotplugHandler *hotplug_dev, DeviceState *dev)
 
     pc_dimm_unplug(PC_DIMM(dev), MACHINE(hotplug_dev));
     object_property_set_bool(OBJECT(dev), false, "realized", NULL);
-    spapr_pending_dimm_unplugs_remove(spapr, ds);
+    if (!object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM)) {
+        spapr_pending_dimm_unplugs_remove(spapr, ds);
+    }
 }
 
 static void spapr_memory_unplug_request(HotplugHandler *hotplug_dev,
@@ -3667,10 +3682,19 @@ static void spapr_memory_unplug_request(HotplugHandler *hotplug_dev,
     int i;
     SpaprDrc *drc;
 
+    /*
     if (object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM)) {
         error_setg(&local_err,
                    "nvdimm device hot unplug is not supported yet.");
         goto out;
+    }*/
+    if (object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM)) {
+        uint64_t slot = object_property_get_uint(OBJECT(dev), PC_DIMM_SLOT_PROP,
+                                             &error_abort);
+    	drc = spapr_drc_by_id(TYPE_SPAPR_DRC_PMEM, slot);
+        spapr_drc_detach(drc);
+	spapr_hotplug_req_remove_by_index(drc);
+	goto out;
     }
 
     size = memory_device_get_region_size(MEMORY_DEVICE(dimm), &error_abort);
