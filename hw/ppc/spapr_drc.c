@@ -421,6 +421,72 @@ void spapr_drc_detach(SpaprDrc *drc)
     spapr_drc_release(drc);
 }
 
+void spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *func, BlockCompletionFunc *cb, void *data)
+{
+    SpaprDrcDeviceAsyncHCallState *state;
+    ThreadPool *pool = aio_get_thread_pool(qemu_get_aio_context());
+
+    state = g_malloc0(sizeof(*state));
+
+    state->hcall = hcall;
+    state->continue_token = 0;
+    state->pending = 1;
+    state->finish = cb;
+    QLIST_INSERT_HEAD(&drc->async_hcall_states, state, next);
+
+    thread_pool_submit_aio(pool, func, data, cb, data);
+}
+/*
+static bool spapr_drc_async_hcall_state_cleanup()
+{
+    aio_poll();
+    printf("Waited for so many seconds \n);
+}
+
+)*/
+/*
+ * spapr_drc_async_hcall_check_pending_and_cleanup
+ *
+ */
+
+int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, uint64_t token, uint64_t *next)
+{
+    int ret;
+    SpaprDrcDeviceAsyncHCallState *state;
+
+    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
+        if (state->hcall == hcall) {
+            if (state->continue_token == token) {
+                if (state->pending) {
+		    state->continue_token++;
+                    *next = state->continue_token;
+		    return H_BUSY;
+		} else {
+                    ret = state->hcall_ret;
+                    QLIST_REMOVE(state, next);
+                    g_free(state);
+		    return ret;
+		}
+	    }
+	}
+    }
+
+    return H_PARAMETER;
+}
+
+void spapr_drc_async_hcall_mark_completed(SpaprDrc *drc, int hcall, int response)
+{
+    SpaprDrcDeviceAsyncHCallState *state;
+
+    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
+        if (state->hcall == hcall) {
+            state->hcall_ret = response;
+            state->pending = 0;
+        }
+    }
+}
+
+
 void spapr_drc_reset(SpaprDrc *drc)
 {
     SpaprDrcClass *drck = SPAPR_DR_CONNECTOR_GET_CLASS(drc);
@@ -431,11 +497,21 @@ void spapr_drc_reset(SpaprDrc *drc)
      * are pending removal can be safely removed.
      */
     if (drc->unplug_requested) {
+	if(spapr_drc_type(drc) == SPAPR_DR_CONNECTOR_TYPE_PMEM) {
+	    printf("NVDIMM Unplug pending \n");
+		if (!QLIST_EMPTY(&drc->async_hcall_states))
+                    printf("%s: NVDIMM Unplug pending has async_hcall_states \n", __func__);
+	}
         spapr_drc_release(drc);
     }
 
     if (drc->dev) {
         /* A device present at reset is ready to go, same as coldplugged */
+	if(spapr_drc_type(drc) == SPAPR_DR_CONNECTOR_TYPE_PMEM) {
+	    printf("device present at reset is ready to go, same as coldplugged nvdimm\n");
+		if (!QLIST_EMPTY(&drc->async_hcall_states))
+                    printf("%s: NVDIMM device present at reset, and has async_hcall_states \n", __func__);
+	}
         drc->state = drck->ready_state;
         /*
          * Ensure that we are able to send the FDT fragment again
@@ -444,6 +520,11 @@ void spapr_drc_reset(SpaprDrc *drc)
         drc->ccs_offset = drc->fdt_start_offset;
         drc->ccs_depth = 0;
     } else {
+	if(spapr_drc_type(drc) == SPAPR_DR_CONNECTOR_TYPE_PMEM) {
+	    printf("drc->dev is null during reset for nvdimm\n");
+		if (!QLIST_EMPTY(&drc->async_hcall_states))
+                    printf("%s: NVDIMM dev numm and has async_hcall_states \n", __func__);
+	}
         drc->state = drck->empty_state;
         drc->ccs_offset = -1;
         drc->ccs_depth = -1;
@@ -558,10 +639,13 @@ SpaprDrc *spapr_dr_connector_new(Object *owner, const char *type,
     drc->owner = owner;
     prop_name = g_strdup_printf("dr-connector[%"PRIu32"]",
                                 spapr_drc_index(drc));
+
     object_property_add_child(owner, prop_name, OBJECT(drc));
     object_unref(OBJECT(drc));
     qdev_realize(DEVICE(drc), NULL, NULL);
     g_free(prop_name);
+
+    QLIST_INIT(&drc->async_hcall_states);
 
     return drc;
 }

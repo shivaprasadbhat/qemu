@@ -30,8 +30,9 @@
 #include "qemu/option.h"
 #include "hw/ppc/fdt.h"
 #include "qemu/range.h"
-#include "sysemu/sysemu.h"
 #include "hw/ppc/spapr_numa.h"
+#include "block/thread-pool.h"
+#include "sysemu/sysemu.h"
 
 bool spapr_nvdimm_validate(HotplugHandler *hotplug_dev, NVDIMMDevice *nvdimm,
                            uint64_t size, Error **errp)
@@ -109,10 +110,12 @@ void spapr_add_nvdimm(DeviceState *dev, uint64_t slot, Error **errp)
 void spapr_create_nvdimm_dr_connectors(SpaprMachineState *spapr)
 {
     MachineState *machine = MACHINE(spapr);
+    //SpaprDrc *drc;
     int i;
 
     for (i = 0; i < machine->ram_slots; i++) {
         spapr_dr_connector_new(OBJECT(spapr), TYPE_SPAPR_DRC_PMEM, i);
+        //drc = spapr_dr_connector_new(OBJECT(spapr), TYPE_SPAPR_DRC_PMEM, i);
     }
 }
 
@@ -164,6 +167,7 @@ static int spapr_dt_nvdimm(SpaprMachineState *spapr, void *fdt,
     _FDT((fdt_setprop_string(fdt, child_offset, "ibm,pmem-application",
                              "operating-system")));
     _FDT(fdt_setprop(fdt, child_offset, "ibm,cache-flush-required", NULL, 0));
+    _FDT(fdt_setprop(fdt, child_offset, "ibm,async-flush-required", NULL, 0));
 
     return child_offset;
 }
@@ -380,6 +384,80 @@ static target_ulong h_scm_bind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
     return H_SUCCESS;
 }
 
+typedef struct SCMAsyncFlushData {
+    int fd;
+    SpaprDrc *drc;
+
+    int ret;
+} SCMAsyncFlushData;
+
+static int worker_cb(void *opaque)
+{
+    SCMAsyncFlushData *req_data = opaque;
+
+    req_data->ret= H_SUCCESS;
+    /* flush raw backing image */
+    if (fdatasync(req_data->fd) < 0) {
+	error_report("papr_scm: Could not sysc nvdimm to backend file: %s", strerror(errno));
+	req_data->ret = H_HARDWARE;
+    }
+
+    return 0;
+}
+
+static void done_cb(void *opaque, int ret)
+{
+    SCMAsyncFlushData *req_data = opaque;
+    SpaprDrc *drc = req_data->drc;
+
+    spapr_drc_async_hcall_mark_completed(drc, H_SCM_ASYNC_FLUSH, req_data->ret);
+
+    g_free(req_data);
+}
+
+static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
+                                      target_ulong opcode, target_ulong *args)
+{
+    int ret;
+    uint32_t drc_index = args[0];
+    uint64_t continue_token = args[1];
+    uint64_t next_token;
+    SpaprDrc *drc = spapr_drc_by_index(drc_index);
+    PCDIMMDevice *dimm;
+//    SpaprDrcDeviceAsyncHCallState *state;
+    HostMemoryBackend *backend = NULL;
+    SCMAsyncFlushData *req_data = g_malloc0(sizeof(SCMAsyncFlushData));
+
+    if (!drc || !drc->dev ||
+        spapr_drc_type(drc) != SPAPR_DR_CONNECTOR_TYPE_PMEM) {
+        return H_PARAMETER;
+    }
+
+    if (continue_token != 0) {
+	ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, continue_token, &next_token);
+	if (ret == H_BUSY) {
+		args[0] = next_token;
+		return H_BUSY;
+	}
+
+	return ret;
+    }
+
+    dimm = PC_DIMM(drc->dev);
+    backend = MEMORY_BACKEND(dimm->hostmem);
+    req_data->drc = drc;
+    req_data->fd = memory_region_get_fd(&backend->mr);
+
+    spapr_drc_enqueue_async_hcall(drc, H_SCM_ASYNC_FLUSH, worker_cb, done_cb, req_data);
+
+
+    ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, 0, &next_token);
+    if (ret == H_BUSY)
+        args[0] = next_token;
+
+    return ret;
+}
+
 static target_ulong h_scm_unbind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
                                      target_ulong opcode, target_ulong *args)
 {
@@ -496,6 +574,7 @@ static void spapr_scm_register_types(void)
     spapr_register_hypercall(H_SCM_BIND_MEM, h_scm_bind_mem);
     spapr_register_hypercall(H_SCM_UNBIND_MEM, h_scm_unbind_mem);
     spapr_register_hypercall(H_SCM_UNBIND_ALL, h_scm_unbind_all);
+    spapr_register_hypercall(H_SCM_ASYNC_FLUSH, h_scm_async_flush);
 }
 
 type_init(spapr_scm_register_types)
