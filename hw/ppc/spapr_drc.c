@@ -438,10 +438,24 @@ void spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *fun
     thread_pool_submit_aio(pool, func, data, cb, data);
 }
 /*
+SpaprDrcDeviceAsyncHCallState spapr_drc_get_hcall_state(SpaprDrc *drc, int hcall, uint64_t token)
+{
+    SpaprDrcDeviceAsyncHCallState *state;
+
+    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
+        printf("%s: going through the hcall states %ld\n", __func__, token);
+        if (state->hcall == hcall)
+            if (state->continue_token == token)
+		    return state;
+    }
+
+    return NULL;
+}
+*/
+/*
 static bool spapr_drc_async_hcall_state_cleanup()
 {
     aio_poll();
-    printf("Waited for so many seconds \n);
 }
 
 )*/
@@ -458,6 +472,7 @@ int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, ui
     SpaprDrcDeviceAsyncHCallState *state;
 
     QLIST_FOREACH(state, &drc->async_hcall_states, next) {
+        printf("%s: going through the hcall states %" PRIu64 " \n", __func__, token);
         if (state->hcall == hcall) {
             if (state->continue_token == token) {
                 if (state->pending) {
@@ -472,6 +487,7 @@ int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, ui
                     ret = state->hcall_ret;
                     QLIST_REMOVE(state, next);
                     g_free(state);
+                    printf("%s: continue_token is %" PRIu64 " success %d \n", __func__, token, ret );
 		    return ret;
 		}
 	    }

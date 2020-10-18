@@ -394,6 +394,9 @@ typedef struct SCMAsyncFlushData {
 static int worker_cb(void *opaque)
 {
     SCMAsyncFlushData *req_data = opaque;
+    time_t start, end;
+    time(&start);
+
 
     req_data->ret= H_SUCCESS;
     /* flush raw backing image */
@@ -401,6 +404,10 @@ static int worker_cb(void *opaque)
 	error_report("papr_scm: Could not sysc nvdimm to backend file: %s", strerror(errno));
 	req_data->ret = H_HARDWARE;
     }
+
+    sleep(12);
+    time(&end);
+    printf("Time taken is %ld\n", end-start);
 
     return 0;
 }
@@ -433,6 +440,7 @@ static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
         return H_PARAMETER;
     }
 
+    printf("%s: continue_token is %" PRIu64 "  \n", __func__, continue_token);
     if (continue_token != 0) {
 	ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, continue_token, &next_token);
 	if (ret == H_BUSY) {
