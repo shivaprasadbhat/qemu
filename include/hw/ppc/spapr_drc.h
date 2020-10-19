@@ -175,7 +175,7 @@ typedef struct SpaprDrc SpaprDrc;
 typedef void SpaprDrcAsyncHcallCompletionFunc(void *opaque, int ret);
 typedef struct SpaprDrcDeviceAsyncHCallState {
     int hcall;
-    int continue_token;
+    uint64_t continue_token;
     bool pending;
 
     int hcall_ret;

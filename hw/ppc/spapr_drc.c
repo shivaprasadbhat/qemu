@@ -15,6 +15,7 @@
 #include "qapi/qmp/qnull.h"
 #include "cpu.h"
 #include "qemu/cutils.h"
+#include "qemu/guest-random.h"
 #include "hw/ppc/spapr_drc.h"
 #include "qom/object.h"
 #include "migration/vmstate.h"
@@ -452,14 +453,20 @@ static bool spapr_drc_async_hcall_state_cleanup()
 int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, uint64_t token, uint64_t *next)
 {
     int ret;
+    uint64_t next_token;
+    Error *err = NULL;
     SpaprDrcDeviceAsyncHCallState *state;
 
     QLIST_FOREACH(state, &drc->async_hcall_states, next) {
         if (state->hcall == hcall) {
             if (state->continue_token == token) {
                 if (state->pending) {
-		    state->continue_token++;
-                    *next = state->continue_token;
+                    if (qemu_guest_getrandom(&next_token, sizeof(next_token), &err) < 0) {
+                        error_report_err(err);
+			return H_TOKEN_PARM;
+		    }
+		    state->continue_token = next_token;
+		    *next = next_token;
 		    return H_BUSY;
 		} else {
                     ret = state->hcall_ret;
