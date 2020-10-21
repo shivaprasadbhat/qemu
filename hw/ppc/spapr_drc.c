@@ -422,20 +422,22 @@ void spapr_drc_detach(SpaprDrc *drc)
     spapr_drc_release(drc);
 }
 
-void spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *func, BlockCompletionFunc *cb, void *data)
+SpaprDrcDeviceAsyncHCallState *spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, void *func(void *), void *data)
 {
     SpaprDrcDeviceAsyncHCallState *state;
-    ThreadPool *pool = aio_get_thread_pool(qemu_get_aio_context());
+//   ThreadPool *pool = aio_get_thread_pool(qemu_get_aio_context());
 
     state = g_malloc0(sizeof(*state));
 
     state->hcall = hcall;
     state->continue_token = 0;
     state->pending = 1;
-    state->finish = cb;
+    //state->finish = cb;
+    qemu_thread_create(&state->thread, "sPAPR SCM flush",
+                       func, data, QEMU_THREAD_JOINABLE);
     QLIST_INSERT_HEAD(&drc->async_hcall_states, state, next);
 
-    thread_pool_submit_aio(pool, func, data, cb, data);
+    return state;
 }
 /*
 SpaprDrcDeviceAsyncHCallState spapr_drc_get_hcall_state(SpaprDrc *drc, int hcall, uint64_t token)
@@ -452,6 +454,21 @@ SpaprDrcDeviceAsyncHCallState spapr_drc_get_hcall_state(SpaprDrc *drc, int hcall
     return NULL;
 }
 */
+
+static void spapr_drc_finish_async_hcall(SpaprDrc *drc)
+{
+    SpaprDrcDeviceAsyncHCallState *state;
+    if (QLIST_EMPTY(&drc->async_hcall_states))
+	    return;
+
+    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
+        qemu_thread_join(&state->thread);
+	printf("The Child exited\n");
+        QLIST_REMOVE(state, next);
+        g_free(state);
+    }
+}
+
 /*
 static bool spapr_drc_async_hcall_state_cleanup()
 {
@@ -497,15 +514,11 @@ int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, ui
     return H_PARAMETER;
 }
 
-void spapr_drc_async_hcall_mark_completed(SpaprDrc *drc, int hcall, int response)
+void spapr_drc_async_hcall_mark_completed(SpaprDrcDeviceAsyncHCallState *state, int response)
 {
-    SpaprDrcDeviceAsyncHCallState *state;
-
-    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
-        if (state->hcall == hcall) {
-            state->hcall_ret = response;
-            state->pending = 0;
-        }
+    if (state) {
+        state->hcall_ret = response;
+        state->pending = 0;
     }
 }
 
@@ -532,7 +545,8 @@ void spapr_drc_reset(SpaprDrc *drc)
         /* A device present at reset is ready to go, same as coldplugged */
 	if(spapr_drc_type(drc) == SPAPR_DR_CONNECTOR_TYPE_PMEM) {
 	    printf("device present at reset is ready to go, same as coldplugged nvdimm\n");
-		if (!QLIST_EMPTY(&drc->async_hcall_states))
+	    spapr_drc_finish_async_hcall(drc);
+	    if (!QLIST_EMPTY(&drc->async_hcall_states))
                     printf("%s: NVDIMM device present at reset, and has async_hcall_states \n", __func__);
 	}
         drc->state = drck->ready_state;
@@ -545,6 +559,7 @@ void spapr_drc_reset(SpaprDrc *drc)
     } else {
 	if(spapr_drc_type(drc) == SPAPR_DR_CONNECTOR_TYPE_PMEM) {
 	    printf("drc->dev is null during reset for nvdimm\n");
+	    spapr_drc_finish_async_hcall(drc);
 		if (!QLIST_EMPTY(&drc->async_hcall_states))
                     printf("%s: NVDIMM dev numm and has async_hcall_states \n", __func__);
 	}

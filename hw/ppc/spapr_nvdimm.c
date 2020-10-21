@@ -22,6 +22,7 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
+#include "qemu/cutils.h"
 #include "qapi/error.h"
 #include "hw/ppc/spapr_drc.h"
 #include "hw/ppc/spapr_nvdimm.h"
@@ -387,20 +388,22 @@ static target_ulong h_scm_bind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
 typedef struct SCMAsyncFlushData {
     int fd;
     SpaprDrc *drc;
+    SpaprDrcDeviceAsyncHCallState *state;
 
     int ret;
 } SCMAsyncFlushData;
 
-static int worker_cb(void *opaque)
+static void *worker_cb(void *opaque)
 {
     SCMAsyncFlushData *req_data = opaque;
     time_t start, end;
     time(&start);
 
+    printf("Worker got called \n");
 
     req_data->ret= H_SUCCESS;
     /* flush raw backing image */
-    if (fdatasync(req_data->fd) < 0) {
+    if (qemu_fdatasync(req_data->fd) < 0) {
 	error_report("papr_scm: Could not sysc nvdimm to backend file: %s", strerror(errno));
 	req_data->ret = H_HARDWARE;
     }
@@ -408,10 +411,13 @@ static int worker_cb(void *opaque)
     sleep(12);
     time(&end);
     printf("Time taken is %ld\n", end-start);
+    spapr_drc_async_hcall_mark_completed(req_data->state, req_data->ret);
+    g_free(req_data);
 
     return 0;
 }
 
+/*
 static void done_cb(void *opaque, int ret)
 {
     SCMAsyncFlushData *req_data = opaque;
@@ -421,6 +427,7 @@ static void done_cb(void *opaque, int ret)
 
     g_free(req_data);
 }
+*/
 
 static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
                                       target_ulong opcode, target_ulong *args)
@@ -445,7 +452,7 @@ static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
 	ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, continue_token, &next_token);
 	if (ret == H_BUSY) {
 		args[0] = next_token;
-		return H_BUSY;
+		return H_LONG_BUSY_ORDER_1_SEC;
 	}
 
 	return ret;
@@ -456,8 +463,7 @@ static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
     req_data->drc = drc;
     req_data->fd = memory_region_get_fd(&backend->mr);
 
-    spapr_drc_enqueue_async_hcall(drc, H_SCM_ASYNC_FLUSH, worker_cb, done_cb, req_data);
-
+    req_data->state = spapr_drc_enqueue_async_hcall(drc, H_SCM_ASYNC_FLUSH, worker_cb, req_data);
 
     ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, 0, &next_token);
     if (ret == H_BUSY)

@@ -181,6 +181,8 @@ typedef struct SpaprDrcDeviceAsyncHCallState {
     int hcall_ret;
     SpaprDrcAsyncHcallCompletionFunc *finish;
 
+    QemuThread thread;
+
     QLIST_ENTRY(SpaprDrcDeviceAsyncHCallState) next;
 } SpaprDrcDeviceAsyncHCallState;
 typedef struct SpaprDrc {
@@ -259,10 +261,9 @@ void spapr_drc_detach(SpaprDrc *drc);
 /* Returns true if a hot plug/unplug request is pending */
 bool spapr_drc_transient(SpaprDrc *drc);
 
-void spapr_drc_finish_async_hcall(SpaprDrc *drc, int hcall, int response);
-void spapr_drc_async_hcall_mark_completed(SpaprDrc *drc, int hcall, int response);
+void spapr_drc_async_hcall_mark_completed(SpaprDrcDeviceAsyncHCallState *state, int response);
 int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, uint64_t token, uint64_t *next);
-void spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *func, BlockCompletionFunc *cb, void *data);
+SpaprDrcDeviceAsyncHCallState *spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, void *func(void *), void *data);
 
 static inline bool spapr_drc_unplug_requested(SpaprDrc *drc)
 {
