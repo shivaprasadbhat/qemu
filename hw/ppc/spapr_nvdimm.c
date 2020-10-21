@@ -387,6 +387,7 @@ static target_ulong h_scm_bind_mem(PowerPCCPU *cpu, SpaprMachineState *spapr,
 typedef struct SCMAsyncFlushData {
     int fd;
     SpaprDrc *drc;
+    SpaprDrcDeviceAsyncHCallState *state;
 
     int ret;
 } SCMAsyncFlushData;
@@ -397,6 +398,7 @@ static int worker_cb(void *opaque)
     time_t start, end;
     time(&start);
 
+    printf("Wroker got scheduled \n");
 
     req_data->ret= H_SUCCESS;
     /* flush raw backing image */
@@ -405,7 +407,7 @@ static int worker_cb(void *opaque)
 	req_data->ret = H_HARDWARE;
     }
 
-    sleep(12);
+    sleep(13);
     time(&end);
     printf("Time taken is %ld\n", end-start);
 
@@ -415,9 +417,8 @@ static int worker_cb(void *opaque)
 static void done_cb(void *opaque, int ret)
 {
     SCMAsyncFlushData *req_data = opaque;
-    SpaprDrc *drc = req_data->drc;
 
-    spapr_drc_async_hcall_mark_completed(drc, H_SCM_ASYNC_FLUSH, req_data->ret);
+    spapr_drc_async_hcall_mark_completed(req_data->state, req_data->ret);
 
     g_free(req_data);
 }
@@ -445,7 +446,7 @@ static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
 	ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, continue_token, &next_token);
 	if (ret == H_BUSY) {
 		args[0] = next_token;
-		return H_BUSY;
+		return H_LONG_BUSY_ORDER_1_SEC;
 	}
 
 	return ret;
@@ -456,7 +457,7 @@ static target_ulong h_scm_async_flush(PowerPCCPU *cpu, SpaprMachineState *spapr,
     req_data->drc = drc;
     req_data->fd = memory_region_get_fd(&backend->mr);
 
-    spapr_drc_enqueue_async_hcall(drc, H_SCM_ASYNC_FLUSH, worker_cb, done_cb, req_data);
+    req_data->state = spapr_drc_enqueue_async_hcall(drc, H_SCM_ASYNC_FLUSH, worker_cb, done_cb, req_data);
 
 
     ret = spapr_drc_async_hcall_check_pending_and_cleanup(drc, H_SCM_ASYNC_FLUSH, 0, &next_token);

@@ -422,7 +422,7 @@ void spapr_drc_detach(SpaprDrc *drc)
     spapr_drc_release(drc);
 }
 
-void spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *func, BlockCompletionFunc *cb, void *data)
+SpaprDrcDeviceAsyncHCallState *spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *func, BlockCompletionFunc *cb, void *data)
 {
     SpaprDrcDeviceAsyncHCallState *state;
     ThreadPool *pool = aio_get_thread_pool(qemu_get_aio_context());
@@ -436,6 +436,7 @@ void spapr_drc_enqueue_async_hcall(SpaprDrc *drc, int hcall, ThreadPoolFunc *fun
     QLIST_INSERT_HEAD(&drc->async_hcall_states, state, next);
 
     thread_pool_submit_aio(pool, func, data, cb, data);
+    return state;
 }
 /*
 SpaprDrcDeviceAsyncHCallState spapr_drc_get_hcall_state(SpaprDrc *drc, int hcall, uint64_t token)
@@ -452,13 +453,19 @@ SpaprDrcDeviceAsyncHCallState spapr_drc_get_hcall_state(SpaprDrc *drc, int hcall
     return NULL;
 }
 */
-/*
-static bool spapr_drc_async_hcall_state_cleanup()
+static void spapr_drc_async_hcall_state_cleanup(SpaprDrc *drc)
 {
-    aio_poll();
+	SpaprDrcDeviceAsyncHCallState *state;
+    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
+	    printf("state->pending chck %d \n", state->pending);
+        if (state->pending) {
+	    printf("Callng  aio_poll\n");
+	    aio_poll(qemu_get_aio_context(), true);
+	    printf("Called aio_poll\n");
+	}
+    }
 }
 
-)*/
 /*
  * spapr_drc_async_hcall_check_pending_and_cleanup
  *
@@ -497,15 +504,12 @@ int spapr_drc_async_hcall_check_pending_and_cleanup(SpaprDrc *drc, int hcall, ui
     return H_PARAMETER;
 }
 
-void spapr_drc_async_hcall_mark_completed(SpaprDrc *drc, int hcall, int response)
+void spapr_drc_async_hcall_mark_completed(SpaprDrcDeviceAsyncHCallState *state,int response)
 {
-    SpaprDrcDeviceAsyncHCallState *state;
 
-    QLIST_FOREACH(state, &drc->async_hcall_states, next) {
-        if (state->hcall == hcall) {
+    if (state) {
             state->hcall_ret = response;
             state->pending = 0;
-        }
     }
 }
 
@@ -527,6 +531,7 @@ void spapr_drc_reset(SpaprDrc *drc)
 	}
         spapr_drc_release(drc);
     }
+    spapr_drc_async_hcall_state_cleanup(drc);
 
     if (drc->dev) {
         /* A device present at reset is ready to go, same as coldplugged */
