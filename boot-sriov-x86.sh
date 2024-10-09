@@ -1,4 +1,4 @@
-gdb --args /home/sbhat/code/qemu/build/x86_64-softmmu/qemu-system-x86_64 \
+/home/sbhat/code/qemu/build/x86_64-softmmu/qemu-system-x86_64 \
 -name guest=something,debug-threads=on -machine q35,cxl=on,usb=off,dump-guest-core=off,nvdimm=on,kernel-irqchip=on \
 -accel kvm -m size=12G -cpu Icelake-Server -smp 8,sockets=1,dies=1,cores=4,threads=2 \
 -monitor telnet:localhost:1248,server,nowait -overcommit mem-lock=off -nographic -rtc base=utc,driftfix=none \
@@ -14,29 +14,17 @@ gdb --args /home/sbhat/code/qemu/build/x86_64-softmmu/qemu-system-x86_64 \
 -netdev user,id=p -netdev user,id=q \
 -netdev user,id=r \
 -device pcie-root-port,id=b \
--device ioh3420,slot=0,id=pcie_port.0 \
+-device ioh3420,slot=1,id=pcie_port.0 \
 -device igb,mac=DE:AD:BE:EE:04:18,netdev=n,bus=pcie_port.0 \
 
-Multifunction
--device virtio-net-pci,bus=b,addr=0x0.0x4,netdev=q,sriov-pf=f \
--device virtio-net-pci,bus=b,addr=0x0.0x3,netdev=p,sriov-pf=f \
--device virtio-net-pci,bus=b,addr=0x0.0x2,netdev=o,sriov-pf=f \
--device virtio-net-pci,bus=b,addr=0x0.0x1,netdev=r,id=g \
--device virtio-net-pci,bus=b,addr=0x0.0x0,netdev=n,id=f,multifunction=on
+-device igb,bus=b,addr=0x0.0x3,netdev=q,sriov-pf=f \
+-device igb,bus=b,addr=0x0.0x2,netdev=p,sriov-pf=f \
+-device igb,bus=b,addr=0x0.0x1,netdev=o,sriov-pf=f \
+-device igb,bus=b,addr=0x0.0x0,netdev=n,id=f
 
-device_add virtio-net-pci,bus=b,addr=0x0.0x4,netdev=q,sriov-pf=f
-device_add virtio-net-pci,bus=b,addr=0x0.0x3,netdev=p,sriov-pf=f
-device_add virtio-net-pci,bus=b,addr=0x0.0x2,netdev=o,sriov-pf=f
-device_add virtio-net-pci,bus=b,addr=0x0.0x1,netdev=r,id=g
-device_add virtio-net-pci,bus=b,addr=0x0.0x0,netdev=n,id=f,multifunction=on
-
-Single function
--device virtio-net-pci,bus=b,addr=0x0.0x0,netdev=n,id=f
 -device virtio-net-pci,bus=b,addr=0x0.0x3,netdev=q,sriov-pf=f \
 -device virtio-net-pci,bus=b,addr=0x0.0x2,netdev=p,sriov-pf=f \
 -device virtio-net-pci,bus=b,addr=0x0.0x1,netdev=o,sriov-pf=f \
+-device virtio-net-pci,bus=b,addr=0x0.0x0,netdev=n,id=f
 
-device_add virtio-net-pci,bus=b,addr=0x0.0x0,netdev=n,id=f
-device_add virtio-net-pci,bus=b,addr=0x0.0x3,netdev=q,sriov-pf=f
-device_add virtio-net-pci,bus=b,addr=0x0.0x2,netdev=p,sriov-pf=f
-device_add virtio-net-pci,bus=b,addr=0x0.0x1,netdev=o,sriov-pf=f
+
