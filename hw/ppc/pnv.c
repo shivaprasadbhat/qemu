@@ -65,7 +65,7 @@
 #define FW_MAX_SIZE             (16 * MiB)
 
 #define KERNEL_LOAD_ADDR        0x20000000
-#define KERNEL_MAX_SIZE         (128 * MiB)
+#define KERNEL_MAX_SIZE         (512 * MiB)
 #define INITRD_LOAD_ADDR        0x28000000
 #define INITRD_MAX_SIZE         (128 * MiB)
 
