@@ -14,6 +14,8 @@ gdb --args /home/sbhat/code/qemu/build/x86_64-softmmu/qemu-system-x86_64 \
 -netdev user,id=p -netdev user,id=q \
 -netdev user,id=r \
 -device pcie-root-port,id=b \
+-device ioh3420,slot=0,id=pcie_port.0 \
+-device igb,mac=DE:AD:BE:EE:04:18,netdev=n,bus=pcie_port.0 \
 
 Multifunction
 -device virtio-net-pci,bus=b,addr=0x0.0x4,netdev=q,sriov-pf=f \

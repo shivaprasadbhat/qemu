@@ -10,10 +10,7 @@ gdb --args /home/shiva-user/qemu/build/qemu-system-ppc64 -machine pseries,usb=of
 -netdev user,id=n -netdev user,id=o -netdev user,id=p -netdev user,id=q \
 -netdev user,id=r \
 -device spapr-pci-host-bridge,index=1,id=pci.1,pcie-extended-configuration-space=on \
--device virtio-net-pci,bus=pci.1.0,addr=0x0.0x3,netdev=q,sriov-pf=f  \
--device virtio-net-pci,bus=pci.1.0,addr=0x0.0x2,netdev=p,sriov-pf=f \
--device virtio-net-pci,bus=pci.1.0,addr=0x0.0x1,netdev=o,sriov-pf=f \
--device virtio-net-pci,bus=pci.1.0,addr=0x0.0x0,netdev=n,id=f \
+-device igb,mac=DE:AD:BE:EE:04:18,netdev=n,bus=pci.1.0 \
 -kernel /home/shiva-user/worktrees/post-final/build-guest/vmlinux -initrd /home/shiva-user/worktrees/post-final/build-guest/initrd.img-6.11.0-rc7-00157-g5a3bd613c389-dirty \
 -append "BOOT_IMAGE=(ieee1275/disk,gpt2)/vmlinuz-6.8.5-301.fc40.ppc64le root=/dev/mapper/sysvg-root ro console=tty1 console=ttyS0,115200n8 rd.lvm.lv=sysvg/root selinux=0 udbg-immortal audit=0 movable_node=1 nmi_watchdog=0"
 
