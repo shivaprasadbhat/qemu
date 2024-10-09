@@ -527,7 +527,12 @@ static void pci_bus_uninit(PCIBus *bus)
 
 bool pci_bus_is_express(const PCIBus *bus)
 {
-    return object_dynamic_cast(OBJECT(bus), TYPE_PCIE_BUS);
+    bool ret = object_dynamic_cast(OBJECT(bus), TYPE_PCIE_BUS);
+    if (!ret)
+	ret = !!(bus->flags & PCI_BUS_EXTENDED_CONFIG_SPACE);
+
+    return ret;
+
 }
 
 void pci_root_bus_init(PCIBus *bus, size_t bus_size, DeviceState *parent,
