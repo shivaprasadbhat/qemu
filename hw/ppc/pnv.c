@@ -72,9 +72,9 @@
 #define PNOR_FILE_NAME          "pnv-pnor.bin"
 
 #define KERNEL_LOAD_ADDR        0x20000000
-#define KERNEL_MAX_SIZE         (128 * MiB)
-#define INITRD_LOAD_ADDR        0x28000000
-#define INITRD_MAX_SIZE         (128 * MiB)
+#define KERNEL_MAX_SIZE         (756* MiB)
+#define INITRD_LOAD_ADDR        0x50000000
+#define INITRD_MAX_SIZE         (512 * MiB)
 
 static const char *pnv_chip_core_typename(const PnvChip *o)
 {
