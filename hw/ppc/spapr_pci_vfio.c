@@ -94,6 +94,10 @@ static VFIOLegacyContainer *vfio_eeh_as_container(AddressSpace *as)
     }
 
     bcontainer = QLIST_FIRST(&space->containers);
+    if (object_dynamic_cast(OBJECT(bcontainer), TYPE_VFIO_IOMMU_IOMMUFD)) {
+        bcontainer = NULL;
+        goto out;
+    }
 
     if (QLIST_NEXT(bcontainer, next)) {
         /*
@@ -106,7 +110,7 @@ static VFIOLegacyContainer *vfio_eeh_as_container(AddressSpace *as)
 
 out:
     vfio_address_space_put(space);
-    return VFIO_IOMMU_LEGACY(bcontainer);
+    return bcontainer ? VFIO_IOMMU_LEGACY(bcontainer) : NULL;
 }
 
 static bool vfio_eeh_as_ok(AddressSpace *as)
