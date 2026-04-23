@@ -8,6 +8,7 @@ config PSERIES
     imply VIRTIO_VGA
     imply VFIO_PCI if LINUX   # needed by spapr_pci_vfio.c
     select NVDIMM
+    select PCI_EXPRESS
     select DIMM
     select PCI
     select SPAPR_VSCSI
