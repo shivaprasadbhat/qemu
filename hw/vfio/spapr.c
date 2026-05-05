@@ -36,6 +36,7 @@ struct VFIOSpaprContainer {
     MemoryListener prereg_listener;
     QLIST_HEAD(, VFIOHostDMAWindow) hostwin_list;
     unsigned int levels;
+    unsigned int flags;
 };
 
 OBJECT_DECLARE_SIMPLE_TYPE(VFIOSpaprContainer, VFIO_IOMMU_SPAPR);
@@ -496,7 +497,7 @@ static bool vfio_spapr_container_setup(VFIOContainer *bcontainer,
 
     scontainer->levels = info.ddw.levels;
 
-    if (v2) {
+    if (v2 && info.flags & VFIO_IOMMU_SPAPR_INFO_DDW ) {
         bcontainer->pgsizes = info.ddw.pgsizes;
         /*
          * There is a default window in just created container.
