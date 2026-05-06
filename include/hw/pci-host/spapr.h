@@ -119,6 +119,7 @@ int spapr_pci_dt_populate(SpaprDrc *drc, SpaprMachineState *spapr,
 /* VFIO EEH hooks */
 #ifdef CONFIG_LINUX
 bool spapr_phb_eeh_available(SpaprPhbState *sphb);
+bool spapr_phb_ddw_enabled(SpaprPhbState *sphb);
 int spapr_phb_vfio_eeh_set_option(SpaprPhbState *sphb,
                                   unsigned int addr, int option);
 int spapr_phb_vfio_eeh_get_state(SpaprPhbState *sphb, int *state);
@@ -157,7 +158,7 @@ void spapr_phb_dma_reset(SpaprPhbState *sphb);
 
 static inline unsigned spapr_phb_windows_supported(SpaprPhbState *sphb)
 {
-    return sphb->ddw_enabled ? SPAPR_PCI_DMA_MAX_WINDOWS : 1;
+    return spapr_phb_ddw_enabled(sphb) ? SPAPR_PCI_DMA_MAX_WINDOWS : 1;
 }
 
 char *spapr_pci_fw_dev_name(PCIDevice *dev);
