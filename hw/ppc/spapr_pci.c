@@ -2281,7 +2281,7 @@ int spapr_dt_phb(SpaprMachineState *spapr, SpaprPhbState *phb,
                           SPAPR_IRQ_NR_MSIS));
 
     /* Dynamic DMA window */
-    if (phb->ddw_enabled) {
+    if (spapr_phb_ddw_enabled(phb)) {
         _FDT(fdt_setprop(fdt, bus_off, "ibm,ddw-applicable", &ddw_applicable,
                          sizeof(ddw_applicable)));
         _FDT(fdt_setprop(fdt, bus_off, "ibm,ddw-extensions",

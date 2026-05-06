@@ -24,7 +24,7 @@
 #include "hw/pci-host/spapr.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/pci_device.h"
-#include "hw/vfio/vfio-container-legacy.h"
+#include "hw/vfio/vfio-container-spapr.h"
 #include "qemu/error-report.h"
 #include CONFIG_DEVICES /* CONFIG_VFIO_PCI */
 
@@ -138,6 +138,23 @@ bool spapr_phb_eeh_available(SpaprPhbState *sphb)
 static void spapr_phb_vfio_eeh_reenable(SpaprPhbState *sphb)
 {
     vfio_eeh_as_op(&sphb->iommu_as, VFIO_EEH_PE_ENABLE);
+}
+
+bool spapr_phb_ddw_enabled(SpaprPhbState *sphb)
+{
+    VFIOLegacyContainer *container = vfio_eeh_as_container(&sphb->iommu_as);
+    VFIOSpaprContainer *scontainer;
+
+    if (!sphb->ddw_enabled)
+		    return false;
+
+    if (container) {
+    	scontainer = VFIO_IOMMU_SPAPR(container);
+    	if (scontainer->max_dynamic_windows_supported == 0)
+	    return false;
+    }
+
+    return true;
 }
 
 void spapr_phb_vfio_reset(DeviceState *qdev)

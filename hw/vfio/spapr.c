@@ -18,6 +18,8 @@
 #include "hw/vfio/vfio-container-legacy.h"
 #include "hw/vfio/kvm-spapr.h"
 #include "hw/core/hw-error.h"
+#include "hw/vfio/vfio-container-spapr.h"
+#include "hw/hw.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "trace.h"
@@ -29,17 +31,6 @@ typedef struct VFIOHostDMAWindow {
     uint64_t iova_pgsizes;
     QLIST_ENTRY(VFIOHostDMAWindow) hostwin_next;
 } VFIOHostDMAWindow;
-
-struct VFIOSpaprContainer {
-    VFIOLegacyContainer parent_obj;
-
-    MemoryListener prereg_listener;
-    QLIST_HEAD(, VFIOHostDMAWindow) hostwin_list;
-    unsigned int levels;
-    unsigned int flags;
-};
-
-OBJECT_DECLARE_SIMPLE_TYPE(VFIOSpaprContainer, VFIO_IOMMU_SPAPR);
 
 static bool vfio_prereg_listener_skipped_section(MemoryRegionSection *section)
 {
@@ -496,6 +487,8 @@ static bool vfio_spapr_container_setup(VFIOContainer *bcontainer,
     }
 
     scontainer->levels = info.ddw.levels;
+    scontainer->max_dynamic_windows_supported = info.ddw.max_dynamic_windows_supported;
+    warn_report("Initialised\n");
 
     if (v2 && info.flags & VFIO_IOMMU_SPAPR_INFO_DDW ) {
         bcontainer->pgsizes = info.ddw.pgsizes;
