@@ -576,6 +576,24 @@ error:
     return false;
 }
 
+static const char *iommufd_get_iommu_class_name(uint32_t hw_type)
+{
+    if (hw_type == IOMMU_HW_INFO_TYPE_PPC64)
+	return TYPE_VFIO_IOMMU_SPAPR_IOMMUFD;
+    else
+        return TYPE_VFIO_IOMMU_IOMMUFD;
+}
+
+static uint32_t iommufd_get_hw_backend_type(IOMMUFDBackend *be, uint32_t devid)
+{
+	uint32_t type;
+	uint64_t caps;
+
+	iommufd_backend_get_device_info(be, devid, &type, NULL, 0, &caps, NULL, NULL);
+
+	return type;
+}
+
 static bool iommufd_cdev_attach(const char *name, VFIODevice *vbasedev,
                                 AddressSpace *as, Error **errp)
 {
@@ -585,7 +603,7 @@ static bool iommufd_cdev_attach(const char *name, VFIODevice *vbasedev,
     struct vfio_device_info dev_info = { .argsz = sizeof(dev_info) };
     int ret, devfd;
     bool res;
-    uint32_t ioas_id;
+    uint32_t ioas_id, hw_type;
     Error *err = NULL;
     const VFIOIOMMUClass *iommufd_vioc =
         VFIO_IOMMU_CLASS(object_class_by_name(TYPE_VFIO_IOMMU_IOMMUFD));
@@ -653,7 +671,8 @@ static bool iommufd_cdev_attach(const char *name, VFIODevice *vbasedev,
     trace_iommufd_cdev_alloc_ioas(vbasedev->iommufd->fd, ioas_id);
 
 skip_ioas_alloc:
-    container = VFIO_IOMMU_IOMMUFD(object_new(TYPE_VFIO_IOMMU_IOMMUFD));
+    hw_type = iommufd_get_hw_backend_type(vbasedev->iommufd, vbasedev->devid);
+    container = VFIO_IOMMU_IOMMUFD(object_new(iommufd_get_iommu_class_name(hw_type)));
     container->be = vbasedev->iommufd;
     container->ioas_id = ioas_id;
     QLIST_INIT(&container->hwpt_list);
@@ -681,6 +700,10 @@ skip_ioas_alloc:
 
     if (!vfio_listener_register(bcontainer, errp)) {
         goto err_listener_register;
+    }
+
+    if (!iommufd_vioc->setup(bcontainer, errp)) {
+	goto err_listener_register;
     }
 
     if (!vfio_iommufd_cpr_register_container(container, errp)) {

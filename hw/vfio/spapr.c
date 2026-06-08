@@ -19,7 +19,7 @@
 #include "hw/vfio/kvm-spapr.h"
 #include "hw/core/hw-error.h"
 #include "hw/vfio/vfio-container-spapr.h"
-#include "hw/hw.h"
+//#include "hw/hw.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "trace.h"

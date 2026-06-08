@@ -25,6 +25,10 @@
 #include "hw/pci/pci_host.h"
 #include "hw/ppc/xics.h"
 #include "qom/object.h"
+#include "system/iommufd.h"
+#include "hw/vfio/vfio-device.h"
+
+struct VFIOIOMMUFDContainer;
 
 #define TYPE_SPAPR_PCI_HOST_BRIDGE "spapr-pci-host-bridge"
 
@@ -78,6 +82,8 @@ struct SpaprPhbState {
     uint64_t page_size_mask;
     uint64_t dma64_win_addr;
 
+    HostIOMMUDeviceIOMMUFD *idev;
+
     uint32_t numa_node;
 
     bool pcie_ecs; /* Allow access to PCIe extended config space? */
@@ -113,6 +119,10 @@ PCIDevice *spapr_pci_find_dev(SpaprMachineState *spapr, uint64_t buid,
 
 /* DRC callbacks */
 void spapr_phb_remove_pci_device_cb(DeviceState *dev);
+void spapr_tce_iommu_remove_dma_window(SpaprPhbState *phb, bool def_win);
+void spapr_tce_iommu_open_dma_window(SpaprPhbState *phb,
+		uint32_t page_shift, uint64_t bus_offset,
+		uint32_t nb_table) ;
 int spapr_pci_dt_populate(SpaprDrc *drc, SpaprMachineState *spapr,
                           void *fdt, int *fdt_start_offset, Error **errp);
 

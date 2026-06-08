@@ -184,6 +184,50 @@ bool iommufd_backend_alloc_ioas(IOMMUFDBackend *be, uint32_t *ioas_id,
     return true;
 }
 
+bool iommufd_backend_get_iova_ranges(IOMMUFDBackend *be, uint32_t ioas_id,
+                                     struct iommu_iova_range **ranges,
+                                     uint32_t *num_iovas,
+                                     Error **errp)
+{
+    int ret, fd = be->fd;
+    struct iommu_ioas_iova_ranges iova_ranges = {
+        .size = sizeof(iova_ranges),
+        .ioas_id = ioas_id,
+        .num_iovas = 0,
+        .allowed_iovas = 0,
+    };
+
+    /* First call to get the number of ranges */
+    ret = ioctl(fd, IOMMU_IOAS_IOVA_RANGES, &iova_ranges);
+    if (ret && errno != EMSGSIZE) {
+        error_setg_errno(errp, errno,
+                         "Failed to get IOVA ranges for ioas_id %u", ioas_id);
+        return false;
+    }
+
+    if (iova_ranges.num_iovas == 0) {
+        *ranges = NULL;
+        *num_iovas = 0;
+        return true;
+    }
+
+    /* Allocate buffer and get the actual ranges */
+    *ranges = g_new0(struct iommu_iova_range, iova_ranges.num_iovas);
+    iova_ranges.allowed_iovas = (uintptr_t)*ranges;
+
+    ret = ioctl(fd, IOMMU_IOAS_IOVA_RANGES, &iova_ranges);
+    if (ret) {
+        error_setg_errno(errp, errno,
+                         "Failed to get IOVA ranges for ioas_id %u", ioas_id);
+        g_free(*ranges);
+        *ranges = NULL;
+        return false;
+    }
+
+    *num_iovas = iova_ranges.num_iovas;
+    return true;
+}
+
 void iommufd_backend_free_id(IOMMUFDBackend *be, uint32_t id)
 {
     int ret, fd = be->fd;

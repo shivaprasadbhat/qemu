@@ -1347,4 +1347,25 @@ struct iommu_hw_queue_alloc {
 	__aligned_u64 length;
 };
 #define IOMMU_HW_QUEUE_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HW_QUEUE_ALLOC)
+
+#define IOMMU_HW_INFO_TYPE_PPC64 5
+
+struct iommu_hw_info_spapr_tce {  // From previous patch
+    __u32 flags;
+    __u64 tce32_start;
+    __u64 tce32_size;
+    __u64 pgsizes;
+    __u32 max_dynamic_windows_supported;
+    __u32 max_levels;
+    __u32 max_available_block_size;
+};
+
+#define IOMMU_HWPT_DATA_PPC64_DMA_WINDOW 4
+struct iommu_hwpt_ppc64_dma_window {
+    __u64 count;
+    __u32 page_shift;
+    __u64 levels;
+    __u64 window_size;
+};
+
 #endif
