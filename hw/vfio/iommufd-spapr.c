@@ -24,13 +24,6 @@
 #include "hw/core/hw-error.h"
 
 #include "hw/vfio/kvm-spapr.h"
-typedef struct VFIOHostDMAWindow {
-    hwaddr min_iova;
-    hwaddr max_iova;
-    uint64_t iova_pgsizes;
-    int window_hwpt_id;
-    QLIST_ENTRY(VFIOHostDMAWindow) hostwin_next;
-} VFIOHostDMAWindow;
 
 static VFIOHostDMAWindow *vfio_find_hostwin(VFIOIOMMUFDSpaprContainer *container,
                                             hwaddr iova, hwaddr end)
@@ -49,7 +42,7 @@ static VFIOHostDMAWindow *vfio_find_hostwin(VFIOIOMMUFDSpaprContainer *container
 }
 
 static void vfio_host_win_add(VFIOIOMMUFDSpaprContainer *scontainer, hwaddr min_iova,
-                              hwaddr max_iova, uint64_t iova_pgsizes, uint32_t hwpt_id)
+                              hwaddr max_iova, uint64_t iova_pgsizes)
 {
     VFIOHostDMAWindow *hostwin;
 
@@ -61,13 +54,13 @@ static void vfio_host_win_add(VFIOIOMMUFDSpaprContainer *scontainer, hwaddr min_
             hw_error("%s: Overlapped IOMMU are not enabled", __func__);
         }
     }
+    warn_report("Adding region [0x%"PRIx64",0x%"PRIx64"]", min_iova, max_iova);
 
     hostwin = g_malloc0(sizeof(*hostwin));
 
     hostwin->min_iova = min_iova;
     hostwin->max_iova = max_iova;
     hostwin->iova_pgsizes = iova_pgsizes;
-    hostwin->window_hwpt_id = hwpt_id;
     QLIST_INSERT_HEAD(&scontainer->hostwin_list, hostwin, hostwin_next);
 }
 
@@ -91,27 +84,58 @@ static bool iommufd_spapr_remove_window(VFIOIOMMUFDSpaprContainer *scontainer,
                                         hwaddr offset_within_address_space,
                                         Error **errp)
 {
-    VFIOIOMMUFDContainer *container = VFIO_IOMMU_IOMMUFD(scontainer);
-    VFIOIOASHwpt *hwpt;
+    VFIOIOMMUFDContainer *container = &scontainer->parent_obj;
+    VFIOIOASHwpt *hwpt, *hwpt_to_remove = NULL;
+    VFIODevice *vbasedev, *tmp_dev;
+    HostIOMMUDeviceIOMMUFD *hiod;
+    Error *local_err = NULL;
     bool ret = true;
 
     /*
      * For SPAPR, we need to remove the HWPT associated with this window.
-     * Find and free the HWPT for this window.
+     * Find the HWPT for this window - it will have devices attached.
+     * TODO: Match by offset_within_address_space when we track it per HWPT.
      */
     QLIST_FOREACH(hwpt, &container->hwpt_list, next) {
-        /*
-         * In SPAPR, each window has its own HWPT. We identify the window
-         * by the IOVA start address stored during window creation.
-         * For now, we'll remove all HWPTs as the default window removal.
-         */
-        if (QLIST_EMPTY(&hwpt->device_list)) {
-            QLIST_REMOVE(hwpt, next);
-            iommufd_backend_free_id(container->be, hwpt->hwpt_id);
-            g_free(hwpt);
+        if (!QLIST_EMPTY(&hwpt->device_list)) {
+            hwpt_to_remove = hwpt;
             break;
         }
     }
+
+    if (!hwpt_to_remove) {
+        /* No HWPT with devices found, nothing to remove */
+        trace_vfio_spapr_remove_window(offset_within_address_space);
+        return true;
+    }
+
+    /*
+     * Detach all devices from this HWPT before destroying it.
+     * Similar to setup where we remove the default window, devices
+     * are left detached so new windows can be created on-demand.
+     * Unlike legacy VFIO where VFIO_IOMMU_SPAPR_TCE_REMOVE handles
+     * everything in the kernel, with iommufd we must explicitly
+     * detach devices via host_iommu_device_iommufd_detach_hwpt()
+     * before destroying the HWPT.
+     */
+    QLIST_FOREACH_SAFE(vbasedev, &hwpt_to_remove->device_list, hwpt_next, tmp_dev) {
+        if (!vbasedev->hiod) {
+            continue;
+        }
+
+        hiod = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
+        if (!host_iommu_device_iommufd_detach_hwpt(hiod, &local_err)) {
+            error_report_err(local_err);
+            local_err = NULL;
+            ret = false;
+            /* Continue trying to detach other devices */
+        }
+    }
+
+    /* Now safe to remove and free the HWPT */
+    QLIST_REMOVE(hwpt_to_remove, next);
+    iommufd_backend_free_id(container->be, hwpt_to_remove->hwpt_id);
+    g_free(hwpt_to_remove);
 
     trace_vfio_spapr_remove_window(offset_within_address_space);
 
@@ -133,22 +157,24 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
     long rampagesize = qemu_minrampagesize();
     struct iommu_iova_range *iova_ranges = NULL;
     uint32_t num_ranges;
-    VFIOIOASHwpt *hwpt;
     VFIODevice *vbasedev = NULL;
     uint32_t new_hwpt_id;
 
     memset(&window, 0, sizeof(window));
 
-    QLIST_FOREACH(hwpt, &bcontainer->hwpt_list, next) {
-	    if (!QLIST_EMPTY(&hwpt->device_list)) {
-		    vbasedev = QLIST_FIRST(&hwpt->device_list);
-		    break;
-	    }
+    /*
+     * Use the container's device_list instead of searching hwpt device lists.
+     * This allows us to find devices even when they're detached from HWPTs
+     * during window transitions, and handles hot-unplug cleanly since devices
+     * are removed from the container list regardless of HWPT state.
+     */
+    if (!QLIST_EMPTY(&container->device_list)) {
+        vbasedev = QLIST_FIRST(&container->device_list);
     }
 
     if (!vbasedev) {
-	    error_setg(errp, "No device available for DMA window creation");
-	    return false;
+        error_setg(errp, "No device available for DMA window creation");
+        return false;
     }
 
     /*
@@ -212,11 +238,12 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
 					bcontainer->ioas_id,
 		   		     0, IOMMU_HWPT_DATA_PPC64_DMA_WINDOW,
 				     sizeof(window), &window, &new_hwpt_id, errp);
-            if (!ret) {
+            if (ret) {
                 break;
             }
         }
     } else { /* ddw_levels == 1 */
+	warn_report("%s: Going to take the levels path\n", __func__);
         if (window.levels > ddw_levels) {
             error_setg_errno(errp, EINVAL, "Host doesn't support multi-level TCE tables"
                              ". Use larger IO page size. Supported mask is 0x%lx",
@@ -228,29 +255,32 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
 					bcontainer->ioas_id,
 		   		     0, IOMMU_HWPT_DATA_PPC64_DMA_WINDOW,
 				     sizeof(window), &window, &new_hwpt_id, errp);
+	warn_report("%s: iommufd_backend_alloc_hwpt returned %d\n", __func__, ret);
     }
 
-    if (ret) {
+    if (!ret) {
         error_setg_errno(errp, errno, "Failed to create a window, ret = %d", ret);
         return false;
     }
 
-    /* Attach all devices in the container to this new HWPT */
-    QLIST_FOREACH(hwpt, &bcontainer->hwpt_list, next) {
-        QLIST_FOREACH(vbasedev, &hwpt->device_list, hwpt_next) {
-            HostIOMMUDeviceIOMMUFD *hiod;
+    /*
+     * Attach all devices in the container to this new HWPT.
+     * Use the container's device_list to find all devices, regardless of
+     * their current HWPT attachment state (they may be detached).
+     */
+    QLIST_FOREACH(vbasedev, &container->device_list, container_next) {
+        HostIOMMUDeviceIOMMUFD *hiod;
 
-            if (!vbasedev->hiod) {
-                continue;
-            }
+        if (!vbasedev->hiod) {
+            continue;
+        }
 
-            hiod = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
-            ret = host_iommu_device_iommufd_attach_hwpt(hiod, new_hwpt_id, errp);
-            if (!ret) {
-                error_prepend(errp, "Failed to attach device to new HWPT: ");
-                iommufd_backend_free_id(bcontainer->be, new_hwpt_id);
-                return false;
-            }
+        hiod = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
+        ret = host_iommu_device_iommufd_attach_hwpt(hiod, new_hwpt_id, errp);
+        if (!ret) {
+            error_prepend(errp, "Failed to attach device to new HWPT: ");
+            iommufd_backend_free_id(bcontainer->be, new_hwpt_id);
+            return false;
         }
     }
 
@@ -265,13 +295,14 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
     for (uint32_t i = 0; i < num_ranges; i++) {
         hwaddr range_start = iova_ranges[i].start;
         hwaddr range_end = iova_ranges[i].last;
+	warn_report("%s: The ranges : start is %lx, end is %lx\n", __func__, range_start, range_end);
 
         /* Skip ranges that already exist in our tracking */
         if (vfio_find_hostwin(scontainer, range_start, range_end)) {
             continue;
         }
 
-        vfio_host_win_add(scontainer, range_start, range_end, pagesize, new_hwpt_id);
+        vfio_host_win_add(scontainer, range_start, range_end, pagesize);
         trace_iommufd_spapr_create_window(range_start, range_end, pagesize,
                                        window.levels, new_hwpt_id);
     }
@@ -362,30 +393,29 @@ static void iommufd_spapr_container_release(VFIOContainer *bcontainer)
 static bool vfio_spapr_iommufd_container_setup(VFIOContainer *bcontainer,
                                        Error **errp)
 {
-    VFIOIOMMUFDContainer *container = VFIO_IOMMU_IOMMUFD(bcontainer);
     VFIOIOMMUFDSpaprContainer *scontainer = VFIO_IOMMU_SPAPR_IOMMUFD(bcontainer);
     struct iommu_hw_info_spapr_tce info;
     VFIODevice *vbasedev = NULL;
-    VFIOIOASHwpt *hwpt;
     uint32_t data_type;
     uint64_t caps;
     int ret;
 
-    QLIST_FOREACH(hwpt, &container->hwpt_list, next) {
-           if (!QLIST_EMPTY(&hwpt->device_list)) {
-                     vbasedev = QLIST_FIRST(&hwpt->device_list);
-                     break;
-           }
+    /*
+     * Use the container's device_list to find a device for querying hardware info.
+     * This is consistent with window creation and handles device lifecycle properly.
+     */
+    if (!QLIST_EMPTY(&bcontainer->device_list)) {
+        vbasedev = QLIST_FIRST(&bcontainer->device_list);
     }
 
     if (!vbasedev) {
-	    error_setg(errp, "No devices attached to container");
-	    return false;
+        error_setg(errp, "No devices attached to container");
+        return false;
     }
 
     if (!iommufd_backend_get_device_info(vbasedev->iommufd, vbasedev->devid,
-			    		 &data_type, &info, sizeof(info), &caps, NULL, errp)) {
-        error_setg_errno(errp, errno, "failed");
+       		 &data_type, &info, sizeof(info), &caps, NULL, errp)) {
+        error_prepend(errp, "Failed to get SPAPR TCE info from iommufd (devid=%u): ", vbasedev->devid);
         return false;
     }
 
@@ -402,6 +432,11 @@ static bool vfio_spapr_iommufd_container_setup(VFIOContainer *bcontainer,
     warn_report("Initialised\n");
 
     scontainer->pgsizes = info.pgsizes;
+
+    vfio_host_win_add(scontainer, info.tce32_start,
+                      info.tce32_start + info.tce32_size - 1,
+                      1ULL << 12);
+
     /*
      * There is a default window in just created container.
      * To make region_add/del simpler, we better remove this
@@ -409,9 +444,15 @@ static bool vfio_spapr_iommufd_container_setup(VFIOContainer *bcontainer,
      * create/remove them when needed.
      */
     ret = iommufd_spapr_remove_window(scontainer, info.tce32_start, errp);
-    if (ret) {
+    if (!ret) {
         error_setg_errno(errp, -ret,
                              "failed to remove existing window");
+        return false;
+    }
+
+    if (vfio_host_win_del(scontainer, info.tce32_start,
+                          info.tce32_start + info.tce32_size - 1) < 0) {
+        error_setg(errp, "Failed to remove default window from tracking list");
         return false;
     }
 
@@ -431,7 +472,7 @@ static void vfio_iommu_iommufd_spapr_class_init(ObjectClass *klass, const void *
 static const TypeInfo types[] = {
     {
         .name = TYPE_VFIO_IOMMU_SPAPR_IOMMUFD,
-        .parent = TYPE_VFIO_IOMMU,
+        .parent = TYPE_VFIO_IOMMU_IOMMUFD,
         .instance_size = sizeof(VFIOIOMMUFDSpaprContainer),
         .class_init = vfio_iommu_iommufd_spapr_class_init,
     },

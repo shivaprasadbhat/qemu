@@ -607,6 +607,7 @@ static bool iommufd_cdev_attach(const char *name, VFIODevice *vbasedev,
     Error *err = NULL;
     const VFIOIOMMUClass *iommufd_vioc =
         VFIO_IOMMU_CLASS(object_class_by_name(TYPE_VFIO_IOMMU_IOMMUFD));
+    const VFIOIOMMUClass *vioc;
 
     vfio_cpr_load_device(vbasedev);
 
@@ -676,6 +677,7 @@ skip_ioas_alloc:
     container->be = vbasedev->iommufd;
     container->ioas_id = ioas_id;
     QLIST_INIT(&container->hwpt_list);
+    vioc = VFIO_IOMMU_GET_CLASS(container);
 
     bcontainer = VFIO_IOMMU(container);
     vfio_address_space_insert(space, bcontainer);
@@ -702,7 +704,8 @@ skip_ioas_alloc:
         goto err_listener_register;
     }
 
-    if (!iommufd_vioc->setup(bcontainer, errp)) {
+    vioc = VFIO_IOMMU_GET_CLASS(bcontainer);
+    if (vioc->setup && !vioc->setup(bcontainer, errp)) {
 	goto err_listener_register;
     }
 
