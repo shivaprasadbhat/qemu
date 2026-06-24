@@ -726,6 +726,9 @@ static void vfio_container_disconnect(VFIOGroup *group)
     VFIOContainer *bcontainer = VFIO_IOMMU(container);
     VFIOIOMMUClass *vioc = VFIO_IOMMU_GET_CLASS(bcontainer);
 
+    warn_report("vfio_container_disconnect: Disconnecting group %d from container fd %d",
+                group->groupid, container->fd);
+
     QLIST_REMOVE(group, container_next);
     group->container = NULL;
     cpr_delete_fd("vfio_container_for_group", group->groupid);
@@ -736,12 +739,15 @@ static void vfio_container_disconnect(VFIOGroup *group)
      * group.
      */
     if (QLIST_EMPTY(&container->group_list)) {
+        warn_report("vfio_container_disconnect: Last group, unregistering listener");
         vfio_listener_unregister(bcontainer);
         if (vioc->release) {
+            warn_report("vfio_container_disconnect: Calling container release");
             vioc->release(bcontainer);
         }
     }
 
+    warn_report("vfio_container_disconnect: Calling VFIO_GROUP_UNSET_CONTAINER ioctl");
     if (ioctl(group->fd, VFIO_GROUP_UNSET_CONTAINER, &container->fd)) {
         error_report("vfio: error disconnecting group %d from container",
                      group->groupid);
@@ -750,6 +756,7 @@ static void vfio_container_disconnect(VFIOGroup *group)
     if (QLIST_EMPTY(&container->group_list)) {
         VFIOAddressSpace *space = bcontainer->space;
 
+        warn_report("vfio_container_disconnect: Closing container fd %d", container->fd);
         trace_vfio_container_disconnect(container->fd);
         vfio_legacy_cpr_unregister_container(container);
         close(container->fd);
@@ -757,6 +764,7 @@ static void vfio_container_disconnect(VFIOGroup *group)
 
         vfio_address_space_put(space);
     }
+    warn_report("vfio_container_disconnect: Done");
 }
 
 static VFIOGroup *vfio_group_get(int groupid, AddressSpace *as, Error **errp)

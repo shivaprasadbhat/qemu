@@ -15,6 +15,7 @@ typedef struct VFIOHostDMAWindow {
     hwaddr min_iova;
     hwaddr max_iova;
     uint64_t iova_pgsizes;
+    uint32_t hwpt_id;  /* HWPT ID associated with this window */
     QLIST_ENTRY(VFIOHostDMAWindow) hostwin_next;
 } VFIOHostDMAWindow;
 
