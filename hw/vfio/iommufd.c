@@ -21,6 +21,7 @@
 #include "qapi/error.h"
 #include "system/iommufd.h"
 #include "hw/core/qdev.h"
+#include "hw/core/boards.h"
 #include "hw/vfio/vfio-cpr.h"
 #include "system/reset.h"
 #include "qemu/cutils.h"
@@ -336,11 +337,14 @@ static bool iommufd_cdev_detach_ioas_hwpt(VFIODevice *vbasedev, Error **errp)
         .flags = 0,
     };
 
+    warn_report("iommufd_cdev_detach_ioas_hwpt: Detaching device %s", vbasedev->name);
+    
     if (ioctl(vbasedev->fd, VFIO_DEVICE_DETACH_IOMMUFD_PT, &detach_data)) {
         error_setg_errno(errp, errno, "detach %s failed", vbasedev->name);
         return false;
     }
 
+    warn_report("iommufd_cdev_detach_ioas_hwpt: Device %s detached successfully", vbasedev->name);
     trace_iommufd_cdev_detach_ioas_hwpt(iommufd, vbasedev->name);
     return true;
 }
@@ -474,13 +478,30 @@ static void iommufd_cdev_autodomains_put(VFIODevice *vbasedev,
 {
     VFIOIOASHwpt *hwpt = vbasedev->hwpt;
 
+    warn_report("iommufd_cdev_autodomains_put: Entered for device %s, HWPT %u",
+                vbasedev->name, hwpt->hwpt_id);
+    
     QLIST_REMOVE(vbasedev, hwpt_next);
     vbasedev->hwpt = NULL;
 
     if (QLIST_EMPTY(&hwpt->device_list)) {
+        warn_report("iommufd_cdev_autodomains_put: HWPT %u device list empty, calling IOMMU_DESTROY",
+                    hwpt->hwpt_id);
+        
+        /*
+         * Free the HWPT. For SPAPR, the kernel's spapr_tce_domain_free()
+         * will handle cleanup of any remaining attached groups by calling
+         * unset_window() for each group still in the domain's group_list.
+         */
         QLIST_REMOVE(hwpt, next);
+        warn_report("iommufd_cdev_autodomains_put: Calling iommufd_backend_free_id for HWPT %u",
+                    hwpt->hwpt_id);
         iommufd_backend_free_id(container->be, hwpt->hwpt_id);
+        warn_report("iommufd_cdev_autodomains_put: IOMMU_DESTROY returned for HWPT %u", hwpt->hwpt_id);
         g_free(hwpt);
+        warn_report("iommufd_cdev_autodomains_put: HWPT %u freed and removed from list", hwpt->hwpt_id);
+    } else {
+        warn_report("iommufd_cdev_autodomains_put: HWPT %u still has devices attached", hwpt->hwpt_id);
     }
 }
 
@@ -516,14 +537,32 @@ static void iommufd_cdev_detach_container(VFIODevice *vbasedev,
 static void iommufd_cdev_container_destroy(VFIOIOMMUFDContainer *container)
 {
     VFIOContainer *bcontainer = VFIO_IOMMU(container);
+    VFIOIOASHwpt *hwpt;
+    int hwpt_count = 0;
+
+    warn_report("iommufd_cdev_container_destroy: Entered");
 
     if (!QLIST_EMPTY(&bcontainer->device_list)) {
+        warn_report("iommufd_cdev_container_destroy: Device list not empty, returning");
         return;
     }
+    
+    /* Count remaining HWPTs before listener unregistration */
+    QLIST_FOREACH(hwpt, &container->hwpt_list, next) {
+        hwpt_count++;
+        warn_report("iommufd_cdev_container_destroy: Found HWPT %u still in list (has %d devices)",
+                    hwpt->hwpt_id, QLIST_EMPTY(&hwpt->device_list) ? 0 : 1);
+    }
+    warn_report("iommufd_cdev_container_destroy: Total HWPTs remaining: %d", hwpt_count);
+    
+    warn_report("iommufd_cdev_container_destroy: Unregistering listener (will trigger del_section_window)");
     vfio_iommufd_cpr_unregister_container(container);
     vfio_listener_unregister(bcontainer);
+    
+    warn_report("iommufd_cdev_container_destroy: Freeing IOAS %u", container->ioas_id);
     iommufd_backend_free_id(container->be, container->ioas_id);
     object_unref(container);
+    warn_report("iommufd_cdev_container_destroy: Done");
 }
 
 static int iommufd_cdev_ram_block_discard_disable(bool state)
@@ -673,6 +712,44 @@ static bool iommufd_cdev_attach(const char *name, VFIODevice *vbasedev,
 
 skip_ioas_alloc:
     hw_type = iommufd_get_hw_backend_type(vbasedev->iommufd, vbasedev->devid);
+    
+    /*
+     * For SPAPR, call IOMMU_IOAS_ALLOW_IOVAS immediately after IOAS allocation
+     * to register both 32-bit and 64-bit DDW windows. This must be done before
+     * any device attachment or HWPT creation to prevent the kernel from reserving
+     * these ranges.
+     */
+    if (hw_type == IOMMU_HW_INFO_TYPE_PPC64) {
+        MachineState *machine = MACHINE(qdev_get_machine());
+        struct iommu_iova_range ranges[2];
+        uint64_t ddw_start = 0x800000000000000ULL; /* 512 PiB - matches SPAPR default */
+        uint64_t max_mem = machine->ram_size;
+        
+        if (machine->maxram_size > machine->ram_size) {
+            max_mem = machine->maxram_size;
+        }
+        
+        /* Range 1: 32-bit window (standard SPAPR TCE window) */
+        ranges[0].start = 0;
+        ranges[0].last = 0x7fffffffULL; /* 2GB */
+        
+        /* Range 2: 64-bit DDW window at 512PiB offset */
+        ranges[1].start = ddw_start;
+        ranges[1].last = ddw_start + max_mem - 1;
+        
+        warn_report("SPAPR: Calling IOMMU_IOAS_ALLOW_IOVAS for IOAS %u with ranges:\n"
+                    "  32-bit: 0x%lx-0x%lx\n"
+                    "  64-bit: 0x%lx-0x%lx\n",
+                    ioas_id, ranges[0].start, ranges[0].last,
+                    ranges[1].start, ranges[1].last);
+        
+        if (!iommufd_backend_allow_iova_range(vbasedev->iommufd, ioas_id,
+                                              ranges, 2, errp)) {
+            error_prepend(errp, "Failed to set allowed IOVA ranges for SPAPR: ");
+            goto err_alloc_ioas;
+        }
+    }
+    
     container = VFIO_IOMMU_IOMMUFD(object_new(iommufd_get_iommu_class_name(hw_type)));
     container->be = vbasedev->iommufd;
     container->ioas_id = ioas_id;
@@ -704,16 +781,9 @@ skip_ioas_alloc:
         goto err_listener_register;
     }
 
-    vioc = VFIO_IOMMU_GET_CLASS(bcontainer);
-    if (vioc->setup && !vioc->setup(bcontainer, errp)) {
-	goto err_listener_register;
-    }
-
     if (!vfio_iommufd_cpr_register_container(container, errp)) {
         goto err_listener_register;
     }
-
-    bcontainer->initialized = true;
 
 found_container:
     vbasedev->cpr.ioas_id = container->ioas_id;
@@ -743,6 +813,20 @@ found_container:
 
     vfio_device_prepare(vbasedev, bcontainer, &dev_info);
     vfio_iommufd_cpr_register_device(vbasedev);
+
+    /*
+     * Call setup() after vfio_device_prepare() so that the device is in the
+     * container's device_list. This is especially important for SPAPR which
+     * needs to query device info during setup. Only call setup() once per
+     * container (when initialized is false).
+     */
+    if (!bcontainer->initialized) {
+        vioc = VFIO_IOMMU_GET_CLASS(bcontainer);
+        if (vioc->setup && !vioc->setup(bcontainer, errp)) {
+            goto err_listener_register;
+        }
+        bcontainer->initialized = true;
+    }
 
     trace_iommufd_cdev_device_info(vbasedev->name, devfd, vbasedev->num_irqs,
                                    vbasedev->num_initial_regions,

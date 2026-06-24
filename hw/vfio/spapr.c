@@ -220,6 +220,9 @@ static int vfio_spapr_remove_window(VFIOLegacyContainer *container,
     };
     int ret;
 
+    warn_report("vfio_spapr_remove_window: Removing window at 0x%"PRIx64" via ioctl",
+                offset_within_address_space);
+
     ret = ioctl(container->fd, VFIO_IOMMU_SPAPR_TCE_REMOVE, &remove);
     if (ret) {
         error_report("Failed to remove window at %"PRIx64,
@@ -227,6 +230,8 @@ static int vfio_spapr_remove_window(VFIOLegacyContainer *container,
         return -errno;
     }
 
+    warn_report("vfio_spapr_remove_window: Window at 0x%"PRIx64" removed successfully",
+                offset_within_address_space);
     trace_vfio_spapr_remove_window(offset_within_address_space);
 
     return 0;
@@ -412,6 +417,11 @@ vfio_spapr_container_del_section_window(VFIOContainer *bcontainer,
 {
     VFIOLegacyContainer *container = VFIO_IOMMU_LEGACY(bcontainer);
     VFIOSpaprContainer *scontainer = VFIO_IOMMU_SPAPR(container);
+    hwaddr range_start = section->offset_within_address_space;
+    hwaddr range_end = range_start + int128_get64(section->size) - 1;
+
+    warn_report("%s: Entered to delete window in the range [0x%"PRIx64",0x%"PRIx64"]\n",
+                __func__, range_start, range_end);
 
     if (container->iommu_type != VFIO_SPAPR_TCE_v2_IOMMU) {
         return;

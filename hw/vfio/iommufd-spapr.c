@@ -16,8 +16,11 @@
 #include "system/iommufd.h"
 #include "system/hostmem.h"
 #include "qemu/error-report.h"
+#include "qemu/range.h"
 #include "trace.h"
 #include "system/kvm.h"
+#include "hw/core/boards.h"
+#include "hw/core/qdev.h"
 //#include "spapr.c"
 #include "hw/vfio/vfio-iommufd-spapr.h"
 #include "hw/vfio/vfio-device.h"
@@ -42,7 +45,7 @@ static VFIOHostDMAWindow *vfio_find_hostwin(VFIOIOMMUFDSpaprContainer *container
 }
 
 static void vfio_host_win_add(VFIOIOMMUFDSpaprContainer *scontainer, hwaddr min_iova,
-                              hwaddr max_iova, uint64_t iova_pgsizes)
+                              hwaddr max_iova, uint64_t iova_pgsizes, uint32_t hwpt_id)
 {
     VFIOHostDMAWindow *hostwin;
 
@@ -54,13 +57,14 @@ static void vfio_host_win_add(VFIOIOMMUFDSpaprContainer *scontainer, hwaddr min_
             hw_error("%s: Overlapped IOMMU are not enabled", __func__);
         }
     }
-    warn_report("Adding region [0x%"PRIx64",0x%"PRIx64"]", min_iova, max_iova);
+    warn_report("Adding region [0x%"PRIx64",0x%"PRIx64"] with HWPT %u", min_iova, max_iova, hwpt_id);
 
     hostwin = g_malloc0(sizeof(*hostwin));
 
     hostwin->min_iova = min_iova;
     hostwin->max_iova = max_iova;
     hostwin->iova_pgsizes = iova_pgsizes;
+    hostwin->hwpt_id = hwpt_id;
     QLIST_INSERT_HEAD(&scontainer->hostwin_list, hostwin, hostwin_next);
 }
 
@@ -88,55 +92,81 @@ static bool iommufd_spapr_remove_window(VFIOIOMMUFDSpaprContainer *scontainer,
     VFIOIOASHwpt *hwpt, *hwpt_to_remove = NULL;
     VFIODevice *vbasedev, *tmp_dev;
     HostIOMMUDeviceIOMMUFD *hiod;
+    VFIOHostDMAWindow *hostwin;
     Error *local_err = NULL;
     bool ret = true;
+    bool found = false;
+    uint32_t target_hwpt_id = 0;
 
-    /*
-     * For SPAPR, we need to remove the HWPT associated with this window.
-     * Find the HWPT for this window - it will have devices attached.
-     * TODO: Match by offset_within_address_space when we track it per HWPT.
-     */
+    QLIST_FOREACH(hostwin, &scontainer->hostwin_list, hostwin_next) {
+        if (hostwin->min_iova == offset_within_address_space) {
+            target_hwpt_id = hostwin->hwpt_id;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        error_report("%s: No window found at 0x%"PRIx64,
+                     __func__, offset_within_address_space);
+        return false;
+    }
+
     QLIST_FOREACH(hwpt, &container->hwpt_list, next) {
-        if (!QLIST_EMPTY(&hwpt->device_list)) {
+        if (hwpt->hwpt_id == target_hwpt_id) {
             hwpt_to_remove = hwpt;
             break;
         }
     }
 
     if (!hwpt_to_remove) {
-        /* No HWPT with devices found, nothing to remove */
+        warn_report("%s: No HWPT found - already freed by autodomains_put(), "
+                    "kernel cleanup already done", __func__);
         trace_vfio_spapr_remove_window(offset_within_address_space);
         return true;
     }
 
-    /*
-     * Detach all devices from this HWPT before destroying it.
-     * Similar to setup where we remove the default window, devices
-     * are left detached so new windows can be created on-demand.
-     * Unlike legacy VFIO where VFIO_IOMMU_SPAPR_TCE_REMOVE handles
-     * everything in the kernel, with iommufd we must explicitly
-     * detach devices via host_iommu_device_iommufd_detach_hwpt()
-     * before destroying the HWPT.
-     */
-    QLIST_FOREACH_SAFE(vbasedev, &hwpt_to_remove->device_list, hwpt_next, tmp_dev) {
+    warn_report("%s: Found HWPT %u to remove (has %d devices attached)", __func__,
+                hwpt_to_remove->hwpt_id,
+                QLIST_EMPTY(&hwpt_to_remove->device_list) ? 0 : 1);
+
+    VFIOContainer *bcontainer = VFIO_IOMMU(container);
+    int device_count = 0;
+    QLIST_FOREACH_SAFE(vbasedev, &bcontainer->device_list, container_next, tmp_dev) {
         if (!vbasedev->hiod) {
+            warn_report("%s: Skipping device %s (no hiod)", __func__, vbasedev->name);
             continue;
         }
 
+        device_count++;
+        warn_report("%s: Detaching device %s from HWPT %u", __func__,
+                    vbasedev->name, hwpt_to_remove->hwpt_id);
+
         hiod = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
         if (!host_iommu_device_iommufd_detach_hwpt(hiod, &local_err)) {
-            error_report_err(local_err);
+            warn_report("%s: Detach failed for device %s: %s", __func__,
+                        vbasedev->name, error_get_pretty(local_err));
+            error_free(local_err);
             local_err = NULL;
             ret = false;
             /* Continue trying to detach other devices */
+        } else {
+            warn_report("%s: Device %s detached successfully", __func__, vbasedev->name);
         }
     }
 
+    if (device_count == 0) {
+        warn_report("%s: No devices found in container to detach from HWPT %u",
+                    __func__, hwpt_to_remove->hwpt_id);
+    }
+
     /* Now safe to remove and free the HWPT */
+    warn_report("%s: Freeing HWPT %u via IOMMU_DESTROY", __func__, hwpt_to_remove->hwpt_id);
     QLIST_REMOVE(hwpt_to_remove, next);
     iommufd_backend_free_id(container->be, hwpt_to_remove->hwpt_id);
     g_free(hwpt_to_remove);
 
+    warn_report("%s: Window at 0x%"PRIx64" removed successfully", __func__, offset_within_address_space);
     trace_vfio_spapr_remove_window(offset_within_address_space);
 
     return ret;
@@ -155,19 +185,16 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
     unsigned entries, bits_total, bits_per_level, max_levels, ddw_levels;
     struct iommu_hwpt_ppc64_dma_window window;
     long rampagesize = qemu_minrampagesize();
-    struct iommu_iova_range *iova_ranges = NULL;
-    uint32_t num_ranges;
     VFIODevice *vbasedev = NULL;
     uint32_t new_hwpt_id;
+    hwaddr window_start = section->offset_within_address_space;
+    hwaddr window_end = window_start + int128_get64(section->size) - 1;
+
+    warn_report("%s: *** ATTEMPTING TO CREATE NEW WINDOW [0x%"PRIx64",0x%"PRIx64"] ***",
+                __func__, window_start, window_end);
 
     memset(&window, 0, sizeof(window));
 
-    /*
-     * Use the container's device_list instead of searching hwpt device lists.
-     * This allows us to find devices even when they're detached from HWPTs
-     * during window transitions, and handles hot-unplug cleanly since devices
-     * are removed from the container list regardless of HWPT state.
-     */
     if (!QLIST_EMPTY(&container->device_list)) {
         vbasedev = QLIST_FIRST(&container->device_list);
     }
@@ -177,10 +204,6 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
         return false;
     }
 
-    /*
-     * The host might not support the guest supported IOMMU page size,
-     * so we will use smaller physical IOMMU pages to back them.
-     */
     if (pagesize > rampagesize) {
         pagesize = rampagesize;
     }
@@ -194,12 +217,6 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
         return false;
     }
 
-    /*
-     * FIXME: For VFIO iommu types which have KVM acceleration to
-     * avoid bouncing all map/unmaps through qemu this way, this
-     * would be the right place to wire that up (tell the KVM
-     * device emulation the VFIO iommu handles to use).
-     */
     window.window_size = int128_get64(section->size);
     window.page_shift = ctz64(pagesize);
     /*
@@ -234,10 +251,14 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
         }
         max_levels = (64 - window.page_shift) / ctz64(qemu_real_host_page_size());
         for ( ; window.levels <= max_levels; ++window.levels) {
-	    ret = iommufd_backend_alloc_hwpt(bcontainer->be, vbasedev->devid,
-					bcontainer->ioas_id,
-		   		     0, IOMMU_HWPT_DATA_PPC64_DMA_WINDOW,
-				     sizeof(window), &window, &new_hwpt_id, errp);
+            warn_report("%s: Calling iommufd_backend_alloc_hwpt for window [0x%"PRIx64",0x%"PRIx64"], levels=%"PRIu64,
+                        __func__, window_start, window_end, window.levels);
+     ret = iommufd_backend_alloc_hwpt(bcontainer->be, vbasedev->devid,
+     bcontainer->ioas_id,
+            0, IOMMU_HWPT_DATA_PPC64_DMA_WINDOW,
+         sizeof(window), &window, &new_hwpt_id, errp);
+            warn_report("%s: iommufd_backend_alloc_hwpt returned %d for window [0x%"PRIx64",0x%"PRIx64"]",
+                        __func__, ret, window_start, window_end);
             if (ret) {
                 break;
             }
@@ -251,15 +272,23 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
             return false;
         }
 
+	       warn_report("%s: Calling iommufd_backend_alloc_hwpt for window [0x%"PRIx64",0x%"PRIx64"], levels=%"PRIu64,
+	                   __func__, window_start, window_end, window.levels);
 	ret = iommufd_backend_alloc_hwpt(bcontainer->be, vbasedev->devid,
 					bcontainer->ioas_id,
 		   		     0, IOMMU_HWPT_DATA_PPC64_DMA_WINDOW,
 				     sizeof(window), &window, &new_hwpt_id, errp);
-	warn_report("%s: iommufd_backend_alloc_hwpt returned %d\n", __func__, ret);
-    }
+	warn_report("%s: iommufd_backend_alloc_hwpt returned %d for window [0x%"PRIx64",0x%"PRIx64"]",
+	                   __func__, ret, window_start, window_end);
+	   }
 
-    if (!ret) {
-        error_setg_errno(errp, errno, "Failed to create a window, ret = %d", ret);
+	   if (!ret) {
+	       /* Error already set by iommufd_backend_alloc_hwpt if it failed */
+	       warn_report("%s: *** WINDOW CREATION FAILED for [0x%"PRIx64",0x%"PRIx64"] with ret=%d, errno=%d (%s) ***",
+	                   __func__, window_start, window_end, ret, errno, strerror(errno));
+	       if (!*errp) {
+	           error_setg_errno(errp, errno, "Failed to create a window, ret = %d", ret);
+        }
         return false;
     }
 
@@ -268,46 +297,61 @@ static bool iommufd_spapr_create_window(VFIOContainer *container,
      * Use the container's device_list to find all devices, regardless of
      * their current HWPT attachment state (they may be detached).
      */
+    warn_report("%s: Attempting to attach devices to new HWPT %u", __func__, new_hwpt_id);
+    int device_count = 0;
     QLIST_FOREACH(vbasedev, &container->device_list, container_next) {
         HostIOMMUDeviceIOMMUFD *hiod;
 
         if (!vbasedev->hiod) {
+            warn_report("%s: Skipping device %s (no hiod)", __func__, vbasedev->name);
             continue;
         }
 
+        device_count++;
+        warn_report("%s: Attaching device %s to HWPT %u", __func__, vbasedev->name, new_hwpt_id);
         hiod = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
         ret = host_iommu_device_iommufd_attach_hwpt(hiod, new_hwpt_id, errp);
+        warn_report("%s: Attach returned %d for device %s", __func__, ret, vbasedev->name);
         if (!ret) {
-            error_prepend(errp, "Failed to attach device to new HWPT: ");
+            error_prepend(errp, "Failed to attach device %s to new HWPT %u: ", vbasedev->name, new_hwpt_id);
+            warn_report("%s: *** ATTACH FAILED, freeing HWPT %u ***", __func__, new_hwpt_id);
             iommufd_backend_free_id(bcontainer->be, new_hwpt_id);
             return false;
         }
     }
+    warn_report("%s: Successfully attached %d devices to HWPT %u", __func__, device_count, new_hwpt_id);
 
-    ret = iommufd_backend_get_iova_ranges(bcontainer->be, bcontainer->ioas_id,
-                                          &iova_ranges, &num_ranges, errp);
-    if (!ret) {
-        error_prepend(errp, "Failed to query IOVA ranges after window creation: ");
-        iommufd_backend_free_id(bcontainer->be, new_hwpt_id);
-        return false;
+    hwaddr range_start = section->offset_within_address_space;
+    hwaddr range_end = range_start + int128_get64(section->size) - 1;
+
+    warn_report("%s: Window created with HWPT %u, range [0x%"PRIx64",0x%"PRIx64"]\n",
+                __func__, new_hwpt_id, range_start, range_end);
+
+    VFIOIOASHwpt *hwpt = g_new0(VFIOIOASHwpt, 1);
+    hwpt->hwpt_id = new_hwpt_id;
+    QLIST_INIT(&hwpt->device_list);
+    QLIST_INSERT_HEAD(&bcontainer->hwpt_list, hwpt, next);
+    warn_report("%s: Added HWPT %u to container hwpt_list", __func__, new_hwpt_id);
+
+    if (!vfio_find_hostwin(scontainer, range_start, range_end)) {
+        vfio_host_win_add(scontainer, range_start, range_end, pagesize, new_hwpt_id);
+
+        /* Update parent VFIOContainer's iova_ranges for DMA mapping validation */
+        Range *range = g_new(Range, 1);
+        range_set_bounds(range, range_start, range_end);
+        VFIOContainer *parent_container = VFIO_IOMMU(bcontainer);
+        parent_container->iova_ranges =
+            range_list_insert(parent_container->iova_ranges, range);
+
+        warn_report("%s: Updated tracking with [0x%"PRIx64",0x%"PRIx64"]\n",
+                    __func__, range_start, range_end);
+    } else {
+        warn_report("%s: Range [0x%"PRIx64",0x%"PRIx64"] already in tracking\n",
+                    __func__, range_start, range_end);
     }
 
-    for (uint32_t i = 0; i < num_ranges; i++) {
-        hwaddr range_start = iova_ranges[i].start;
-        hwaddr range_end = iova_ranges[i].last;
-	warn_report("%s: The ranges : start is %lx, end is %lx\n", __func__, range_start, range_end);
-
-        /* Skip ranges that already exist in our tracking */
-        if (vfio_find_hostwin(scontainer, range_start, range_end)) {
-            continue;
-        }
-
-        vfio_host_win_add(scontainer, range_start, range_end, pagesize);
-        trace_iommufd_spapr_create_window(range_start, range_end, pagesize,
-                                       window.levels, new_hwpt_id);
-    }
-
-    g_free(iova_ranges);
+    trace_iommufd_spapr_create_window(range_start, range_end, pagesize,
+                                   window.levels, new_hwpt_id);
 
     *pgsize = pagesize;
 
@@ -360,7 +404,22 @@ iommufd_spapr_container_del_section_window(VFIOContainer *bcontainer,
 {
     VFIOIOMMUFDContainer *container = VFIO_IOMMU_IOMMUFD(bcontainer);
     VFIOIOMMUFDSpaprContainer *scontainer = VFIO_IOMMU_SPAPR_IOMMUFD(container);
+    VFIOIOASHwpt *hwpt;
+    int hwpt_count = 0;
+    hwaddr window_start = section->offset_within_address_space;
+    hwaddr window_end = window_start + int128_get64(section->size) - 1;
     Error *err = NULL;
+    GList *item, *next;
+
+    /* Count HWPTs in the list */
+    QLIST_FOREACH(hwpt, &container->hwpt_list, next) {
+        hwpt_count++;
+        warn_report("%s: Found HWPT %u with %d devices", __func__,
+                    hwpt->hwpt_id, QLIST_EMPTY(&hwpt->device_list) ? 0 : 1);
+    }
+
+    warn_report("%s: Called to delete window [0x%"PRIx64",0x%"PRIx64"], HWPT count=%d",
+                __func__, window_start, window_end, hwpt_count);
 
     if (!iommufd_spapr_remove_window(scontainer,
                                      section->offset_within_address_space,
@@ -368,12 +427,23 @@ iommufd_spapr_container_del_section_window(VFIOContainer *bcontainer,
         error_report_err(err);
     }
 
-    if (vfio_host_win_del(scontainer,
-                          section->offset_within_address_space,
-                          section->offset_within_address_space +
-                          int128_get64(section->size) - 1) < 0) {
+    if (vfio_host_win_del(scontainer, window_start, window_end) < 0) {
         hw_error("%s: Cannot delete missing window at %"HWADDR_PRIx,
                  __func__, section->offset_within_address_space);
+    }
+
+    Range window_range;
+    range_set_bounds(&window_range, window_start, window_end);
+
+    for (item = bcontainer->iova_ranges; item; item = next) {
+        Range *range = item->data;
+        next = item->next;
+
+        /* Check if this range overlaps with the window being removed */
+        if (range_overlaps_range(range, &window_range)) {
+            bcontainer->iova_ranges = g_list_remove_link(bcontainer->iova_ranges, item);
+            g_list_free_full(item, g_free);
+        }
     }
 }
 
@@ -400,10 +470,6 @@ static bool vfio_spapr_iommufd_container_setup(VFIOContainer *bcontainer,
     uint64_t caps;
     int ret;
 
-    /*
-     * Use the container's device_list to find a device for querying hardware info.
-     * This is consistent with window creation and handles device lifecycle properly.
-     */
     if (!QLIST_EMPTY(&bcontainer->device_list)) {
         vbasedev = QLIST_FIRST(&bcontainer->device_list);
     }
@@ -433,9 +499,11 @@ static bool vfio_spapr_iommufd_container_setup(VFIOContainer *bcontainer,
 
     scontainer->pgsizes = info.pgsizes;
 
+    VFIOIOMMUFDContainer *icontainer = VFIO_IOMMU_IOMMUFD(bcontainer);
+    uint32_t initial_hwpt_id = QLIST_FIRST(&icontainer->hwpt_list)->hwpt_id;
     vfio_host_win_add(scontainer, info.tce32_start,
                       info.tce32_start + info.tce32_size - 1,
-                      1ULL << 12);
+                      1ULL << 12, initial_hwpt_id);
 
     /*
      * There is a default window in just created container.

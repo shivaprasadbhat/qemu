@@ -155,6 +155,7 @@ static void vfio_iommu_map_notify(IOMMUNotifier *n, IOMMUTLBEntry *iotlb)
 
     if ((iotlb->perm & IOMMU_RW) != IOMMU_NONE) {
         bool read_only;
+	static int wrap= 0;
 
         mr = vfio_translate_iotlb(iotlb, &xlat, &local_err);
         if (!mr) {
@@ -175,10 +176,12 @@ static void vfio_iommu_map_notify(IOMMUNotifier *n, IOMMUTLBEntry *iotlb)
                                      iotlb->addr_mask + 1, vaddr,
                                      read_only, mr);
         if (ret) {
-            error_report("vfio_container_dma_map(%p, 0x%"HWADDR_PRIx", "
+		if (wrap % 100000 == 0)
+	            error_report("vfio_container_dma_map(%p, 0x%"HWADDR_PRIx", "
                          "0x%"HWADDR_PRIx", %p) = %d (%s)",
                          bcontainer, iova,
                          iotlb->addr_mask + 1, vaddr, ret, strerror(-ret));
+		wrap++;
         }
     } else {
         ret = vfio_container_dma_unmap(bcontainer, iova,

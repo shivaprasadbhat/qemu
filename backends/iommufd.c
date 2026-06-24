@@ -199,6 +199,8 @@ bool iommufd_backend_get_iova_ranges(IOMMUFDBackend *be, uint32_t ioas_id,
 
     /* First call to get the number of ranges */
     ret = ioctl(fd, IOMMU_IOAS_IOVA_RANGES, &iova_ranges);
+    warn_report("%s: First ioctl returned ret=%d, errno=%d, num_iovas=%u\n",
+                __func__, ret, errno, iova_ranges.num_iovas);
     if (ret && errno != EMSGSIZE) {
         error_setg_errno(errp, errno,
                          "Failed to get IOVA ranges for ioas_id %u", ioas_id);
@@ -206,6 +208,7 @@ bool iommufd_backend_get_iova_ranges(IOMMUFDBackend *be, uint32_t ioas_id,
     }
 
     if (iova_ranges.num_iovas == 0) {
+        warn_report("%s: num_iovas is 0, returning empty\n", __func__);
         *ranges = NULL;
         *num_iovas = 0;
         return true;
@@ -216,6 +219,7 @@ bool iommufd_backend_get_iova_ranges(IOMMUFDBackend *be, uint32_t ioas_id,
     iova_ranges.allowed_iovas = (uintptr_t)*ranges;
 
     ret = ioctl(fd, IOMMU_IOAS_IOVA_RANGES, &iova_ranges);
+    warn_report("%s: Second ioctl returned ret=%d, errno=%d\n", __func__, ret, errno);
     if (ret) {
         error_setg_errno(errp, errno,
                          "Failed to get IOVA ranges for ioas_id %u", ioas_id);
@@ -225,6 +229,42 @@ bool iommufd_backend_get_iova_ranges(IOMMUFDBackend *be, uint32_t ioas_id,
     }
 
     *num_iovas = iova_ranges.num_iovas;
+    warn_report("%s: Returning %u ranges\n", __func__, *num_iovas);
+    for (uint32_t i = 0; i < *num_iovas; i++) {
+        warn_report("%s:   Range[%u]: 0x%lx - 0x%lx\n", __func__, i,
+                    (*ranges)[i].start, (*ranges)[i].last);
+    }
+    return true;
+}
+
+bool iommufd_backend_allow_iova_range(IOMMUFDBackend *be, uint32_t ioas_id,
+                                      struct iommu_iova_range *ranges,
+                                      uint32_t num_ranges, Error **errp)
+{
+    int ret, fd = be->fd;
+    struct iommu_ioas_allow_iovas allow = {
+        .size = sizeof(allow),
+        .ioas_id = ioas_id,
+        .num_iovas = num_ranges,
+        .__reserved = 0,
+        .allowed_iovas = (uintptr_t)ranges,
+    };
+
+    warn_report("%s: Allowing %u IOVA ranges for IOAS %u\n",
+                __func__, num_ranges, ioas_id);
+    for (uint32_t i = 0; i < num_ranges; i++) {
+        warn_report("%s:   Range[%u]: 0x%lx - 0x%lx\n", __func__, i,
+                    ranges[i].start, ranges[i].last);
+    }
+
+    ret = ioctl(fd, IOMMU_IOAS_ALLOW_IOVAS, &allow);
+    if (ret) {
+        error_setg_errno(errp, errno,
+                         "Failed to allow IOVA ranges for ioas_id %u", ioas_id);
+        return false;
+    }
+
+    warn_report("%s: Successfully allowed IOVA ranges\n", __func__);
     return true;
 }
 
@@ -236,11 +276,13 @@ void iommufd_backend_free_id(IOMMUFDBackend *be, uint32_t id)
         .id = id,
     };
 
+    warn_report("iommufd_backend_free_id: Freeing ID %u", id);
     ret = ioctl(fd, IOMMU_DESTROY, &des);
     trace_iommufd_backend_free_id(fd, id, ret);
     if (ret) {
         error_report("Failed to free id: %u %m", id);
     }
+    warn_report("iommufd_backend_free_id: ID %u freed, ret=%d", id, ret);
 }
 
 int iommufd_backend_map_dma(IOMMUFDBackend *be, uint32_t ioas_id, hwaddr iova,
