@@ -402,7 +402,7 @@ iommufd_spapr_container_add_section_window(VFIOContainer *bcontainer,
         return false;
     }
 
-    if (kvm_enabled() && !vfio_spapr_kvm_attach_tce(bcontainer, section, errp)) {
+    if (kvm_enabled() && !vfio_spapr_kvm_attach_tce_iommufd(bcontainer, section, errp)) {
         return false;
     }
 

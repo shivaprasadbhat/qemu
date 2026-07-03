@@ -10,3 +10,7 @@
 bool vfio_spapr_kvm_attach_tce(VFIOContainer *bcontainer,
                                MemoryRegionSection *section,
                                Error **errp);
+
+bool vfio_spapr_kvm_attach_tce_iommufd(VFIOContainer *bcontainer,
+                                       MemoryRegionSection *section,
+                                       Error **errp);

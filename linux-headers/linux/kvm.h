@@ -1190,6 +1190,7 @@ struct kvm_device_attr {
 #define   KVM_DEV_VFIO_GROUP_ADD	KVM_DEV_VFIO_FILE_ADD
 #define   KVM_DEV_VFIO_GROUP_DEL	KVM_DEV_VFIO_FILE_DEL
 #define   KVM_DEV_VFIO_GROUP_SET_SPAPR_TCE		3
+#define   KVM_DEV_VFIO_FILE_SET_SPAPR_TCE		4
 
 enum kvm_device_type {
 	KVM_DEV_TYPE_FSL_MPIC_20	= 1,
@@ -1232,6 +1233,14 @@ enum kvm_device_type {
 struct kvm_vfio_spapr_tce {
 	__s32	groupfd;
 	__s32	tablefd;
+};
+
+/* Used with KVM_DEV_VFIO_FILE_SET_SPAPR_TCE (iommufd / vfio cdev path) */
+struct kvm_vfio_iommufd_spapr_tce {
+	__s32	devfd;		/* vfio device fd (cdev) */
+	__s32	tablefd;	/* KVM_CREATE_SPAPR_TCE_64 fd */
+	__s32	iommufd;	/* iommufd fd */
+	__u32	ioas_id;	/* IOAS id to attach to */
 };
 
 #define KVM_S390_KEYOP_ISKE 0x01

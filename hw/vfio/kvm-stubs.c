@@ -32,3 +32,10 @@ bool vfio_spapr_kvm_attach_tce(VFIOContainer *bcontainer,
 {
     g_assert_not_reached();
 }
+
+bool vfio_spapr_kvm_attach_tce_iommufd(VFIOContainer *bcontainer,
+                                       MemoryRegionSection *section,
+                                       Error **errp)
+{
+    g_assert_not_reached();
+}
