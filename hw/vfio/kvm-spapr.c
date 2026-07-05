@@ -15,6 +15,7 @@
 #include "hw/vfio/vfio-device.h"
 #include "qapi/error.h"
 #include "system/iommufd.h"
+#include "system/kvm.h"
 #include "trace.h"
 #include "vfio-helpers.h"
 
@@ -62,6 +63,17 @@ bool vfio_spapr_kvm_attach_tce_iommufd(VFIOContainer *bcontainer,
         .addr  = (uint64_t)(unsigned long)&param,
     };
     VFIODevice *vbasedev;
+
+    /*
+     * KVM_CAP_SPAPR_TCE_IOMMUFD is advertised only when the kernel was
+     * built with CONFIG_KVM_BOOK3S_TCE_IOMMUFD=y (i.e. both SPAPR_TCE_IOMMU
+     * and IOMMUFD enabled).  Skip in-kernel acceleration gracefully if the
+     * capability is absent — userspace TCE handling will be used instead.
+     */
+    if (!kvm_enabled() ||
+        !kvm_check_extension(kvm_state, KVM_CAP_SPAPR_TCE_IOMMUFD)) {
+        return true;
+    }
 
     if (memory_region_iommu_get_attr(iommu_mr, IOMMU_ATTR_SPAPR_TCE_FD,
                                      &param.tablefd)) {
